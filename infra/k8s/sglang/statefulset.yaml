@@ -46,6 +46,12 @@ spec:
             - "$(SGLANG_MAX_RUNNING_REQUESTS)"
             - "--chunked-prefill-size"
             - "$(SGLANG_CHUNKED_PREFILL_SIZE)"
+            - "--enable-priority-scheduling"
+            - "--radix-eviction-policy"
+            - "priority"
+            - "--enable-hierarchical-cache"
+            - "--hicache-write-policy"
+            - "write_through"
             - "--enable-metrics"
           envFrom:
             - configMapRef:

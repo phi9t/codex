@@ -31,6 +31,11 @@ services:
         --tp ${TENSOR_PARALLEL_SIZE:-1}
         --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
         --chunked-prefill-size ${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+        --enable-priority-scheduling
+        --radix-eviction-policy ${SGLANG_RADIX_EVICTION_POLICY:-priority}
+        --enable-hierarchical-cache
+        --hicache-write-policy ${SGLANG_HICACHE_WRITE_POLICY:-write_through}
+        --enable-metrics
         --disaggregation-mode prefill
     ipc: host
     shm_size: "32g"
@@ -73,6 +78,11 @@ services:
         --tp ${TENSOR_PARALLEL_SIZE:-1}
         --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
         --max-running-requests ${SGLANG_MAX_RUNNING_REQUESTS:-64}
+        --enable-priority-scheduling
+        --radix-eviction-policy ${SGLANG_RADIX_EVICTION_POLICY:-priority}
+        --enable-hierarchical-cache
+        --hicache-write-policy ${SGLANG_HICACHE_WRITE_POLICY:-write_through}
+        --enable-metrics
         --disaggregation-mode decode
     ipc: host
     shm_size: "32g"

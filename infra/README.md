@@ -1,30 +1,32 @@
-# Self-Hosted Inference for Codex (Dynamo + SGLang)
+# Self-Hosted Inference for Codex and Claude Code (Dynamo + SGLang)
 
-Containerized infrastructure for serving open-source models to Codex CLI using
-NVIDIA Dynamo (cluster orchestration) and SGLang (inference runtime).
+Containerized infrastructure for serving open-source models to **Codex CLI** and
+**Claude Code CLI** using NVIDIA Dynamo (cluster orchestration) and SGLang
+(inference runtime).
 
 ## Architecture
 
 ```text
-Codex CLI ──> Edge / Auth
-                  │
-                  ├── /v1/chat/completions  (wire_api = "chat")
-                  └── /v1/responses         (wire_api = "responses", if supported)
-                  │
-              Dynamo Frontend (protocol normalization, request queueing)
-                  │
-              Dynamo Router (KV-aware routing, load balancing)
-                  │
-          ┌───────┼───────┐
-          │       │       │
-     SGLang    SGLang   SGLang
-     Worker    Worker   Worker
-      (GPU)    (GPU)    (GPU)
-          │       │       │
-     RadixAttention / HiCache / Continuous Batching
-                  │
-              NATS JetStream (KV events, load metrics, router sync)
-              etcd (service discovery — local dev only)
+Codex CLI ────────┐
+                  ├── Edge / auth / per-tenant policy
+Claude Code CLI ──┘
+                        ├── Codex adapter:  /v1/responses or /v1/chat/completions
+                        └── Claude adapter: /v1/messages (requires translation layer)
+                        │
+                    Dynamo Frontend (protocol normalization, request queueing)
+                        │
+                    Dynamo Router (KV-aware routing, priority scheduling)
+                        │
+                ┌───────┼───────┐
+                │       │       │
+           SGLang    SGLang   SGLang
+           Worker    Worker   Worker
+            (GPU)    (GPU)    (GPU)
+                │       │       │
+           RadixAttention / HiCache / Priority Scheduling
+                        │
+                    NATS JetStream (KV events, load metrics, router sync)
+                    etcd (service discovery — local dev only)
 ```
 
 ## Prerequisites
@@ -194,6 +196,89 @@ kubectl -n codex-inference scale statefulset sglang-worker --replicas=3
 # Scale Dynamo frontend replicas
 kubectl -n codex-inference scale deployment dynamo-frontend --replicas=3
 ```
+
+## Claude Code Integration
+
+SGLang serves an OpenAI-compatible API (`/v1/chat/completions`). Claude Code
+requires Anthropic Messages API semantics (`/v1/messages`, `/v1/messages/count_tokens`)
+with preserved headers like `anthropic-beta` and `anthropic-version`.
+
+A **translation layer** is needed between Claude Code and the SGLang/Dynamo backend.
+The simplest option is [litellm](https://docs.litellm.ai/):
+
+```bash
+# Run litellm as a proxy (translates Anthropic Messages -> OpenAI Chat)
+pip install litellm
+litellm --model openai/Qwen/Qwen2.5-Coder-7B-Instruct \
+        --api_base http://localhost:30000 \
+        --port 4000
+
+# Then point Claude Code at the litellm proxy:
+export ANTHROPIC_BASE_URL=http://localhost:4000
+```
+
+For production, run litellm as a Docker container or deploy a purpose-built
+translation service. The adapter should:
+
+1. Accept `/v1/messages` and `/v1/messages/count_tokens`
+2. Translate to `/v1/chat/completions` (or `/v1/responses`)
+3. Preserve `anthropic-beta`, `anthropic-version`, and session headers
+4. Stream SSE responses back in Anthropic Messages format
+
+The adapter must be stateless and translation-only. Routing stays in Dynamo.
+
+## Agentic Workload Optimization
+
+All SGLang workers are launched with flags optimized for coding-agent workloads:
+
+- **`--enable-priority-scheduling`** — allows P0 interactive requests to preempt
+  P2 background jobs in the scheduler queue
+- **`--radix-eviction-policy priority`** — preserves high-value session prefixes
+  (system prompt, tool schemas, conversation stem) in the radix cache longer
+- **`--enable-hierarchical-cache`** — enables HiCache, extending KV capacity from
+  GPU VRAM to host memory for warm-tier storage
+- **`--hicache-write-policy write_through`** — ensures host-tier KV is always
+  current, preventing loss of valuable prefixes on GPU eviction
+
+These matter because coding-agent sessions are **write-once-read-many KV workloads**:
+after the first turn, 85-97% of tokens are cached prefix. Priority scheduling
+ensures interactive turns stay fast even when background analysis jobs are queued.
+
+Tune via `.env` (Docker Compose) or the ConfigMap (Kubernetes):
+
+```bash
+SGLANG_RADIX_EVICTION_POLICY=priority    # or "lru" for simpler behavior
+SGLANG_HICACHE_WRITE_POLICY=write_through # or "write_back" for lower host I/O
+```
+
+## Observability
+
+SGLang workers expose a Prometheus-compatible `/metrics` endpoint when launched
+with `--enable-metrics` (enabled by default in all configurations here).
+
+Key metrics to monitor:
+
+| Metric | What it tells you |
+|--------|-------------------|
+| TTFT (time to first token) | Interactive responsiveness |
+| ITL (inter-token latency) | Streaming smoothness |
+| Cache hit rate / overlap score | KV reuse effectiveness |
+| Queue depth | Backpressure / capacity headroom |
+| GPU memory utilization | OOM risk |
+| Inflight requests | Concurrency load |
+
+Scrape with Prometheus:
+
+```yaml
+# prometheus.yml snippet
+scrape_configs:
+  - job_name: sglang
+    static_configs:
+      - targets: ["sglang-worker:30000"]  # or K8s service discovery
+```
+
+Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
+`dynamo_frontend_queued_requests`) on its health/metrics port.
 
 ## Troubleshooting
 
