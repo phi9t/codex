@@ -1,0 +1,47 @@
+# =============================================================================
+# SGLang-only: simplest path to serve an OSS model for Codex
+# =============================================================================
+# Usage:
+#   cp .env.example .env   # edit MODEL_NAME, HF_TOKEN as needed
+#   docker compose -f docker-compose.sglang-only.yml up -d
+#
+# Then connect Codex:
+#   CODEX_OSS_BASE_URL=http://localhost:30000/v1 codex --oss -m <MODEL_NAME>
+
+services:
+  sglang:
+    image: lmsysorg/sglang:latest
+    ports:
+      - "${SGLANG_PORT:-30000}:30000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    command: >
+      python3 -m sglang.launch_server
+        --model-path ${MODEL_NAME:-Qwen/Qwen2.5-Coder-7B-Instruct}
+        --host 0.0.0.0
+        --port 30000
+        --tp ${TENSOR_PARALLEL_SIZE:-1}
+        --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
+        --max-running-requests ${SGLANG_MAX_RUNNING_REQUESTS:-64}
+        --chunked-prefill-size ${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+    ipc: host
+    shm_size: "32g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${TENSOR_PARALLEL_SIZE:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 120
+      start_period: 300s
+    restart: unless-stopped
+
+volumes:
+  hf-cache:

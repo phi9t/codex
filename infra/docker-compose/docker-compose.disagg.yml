@@ -1,0 +1,109 @@
+# =============================================================================
+# Disaggregated prefill/decode override
+# =============================================================================
+# Usage (extends the base compose):
+#   docker compose -f docker-compose.yml -f docker-compose.disagg.yml up -d
+#
+# Requires at least 2 GPUs. Splits inference into separate prefill and decode
+# workers for better TTFT/ITL under high concurrency.
+
+services:
+  # Disable the aggregated worker from the base compose
+  sglang-worker:
+    profiles: ["disabled"]
+
+  # ---------------------------------------------------------------------------
+  # Prefill worker: compute-bound, processes initial prompt tokens
+  # ---------------------------------------------------------------------------
+  sglang-prefill:
+    image: lmsysorg/sglang:latest
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - NATS_SERVER=nats://nats:4222
+      - ETCD_ENDPOINTS=http://etcd:2379
+    command: >
+      python3 -m sglang.launch_server
+        --model-path ${MODEL_NAME:-Qwen/Qwen2.5-Coder-7B-Instruct}
+        --host 0.0.0.0
+        --port 30000
+        --tp ${TENSOR_PARALLEL_SIZE:-1}
+        --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
+        --chunked-prefill-size ${SGLANG_CHUNKED_PREFILL_SIZE:-8192}
+        --disaggregation-mode prefill
+    ipc: host
+    shm_size: "32g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${TENSOR_PARALLEL_SIZE:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 120
+      start_period: 300s
+    depends_on:
+      etcd:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Decode worker: memory-bound, generates tokens one at a time
+  # ---------------------------------------------------------------------------
+  sglang-decode:
+    image: lmsysorg/sglang:latest
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - NATS_SERVER=nats://nats:4222
+      - ETCD_ENDPOINTS=http://etcd:2379
+    command: >
+      python3 -m sglang.launch_server
+        --model-path ${MODEL_NAME:-Qwen/Qwen2.5-Coder-7B-Instruct}
+        --host 0.0.0.0
+        --port 30000
+        --tp ${TENSOR_PARALLEL_SIZE:-1}
+        --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
+        --max-running-requests ${SGLANG_MAX_RUNNING_REQUESTS:-64}
+        --disaggregation-mode decode
+    ipc: host
+    shm_size: "32g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${TENSOR_PARALLEL_SIZE:-1}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:30000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 120
+      start_period: 300s
+    depends_on:
+      etcd:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Override dynamo-frontend to depend on disaggregated workers
+  dynamo-frontend:
+    depends_on:
+      sglang-prefill:
+        condition: service_healthy
+      sglang-decode:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
