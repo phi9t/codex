@@ -1,0 +1,33 @@
+# Headless service for StatefulSet DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-worker-headless
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: sglang-worker
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: sglang-worker
+  ports:
+    - name: http
+      port: 30000
+---
+# ClusterIP service for Dynamo to reach workers
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-worker
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: sglang-worker
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sglang-worker
+  ports:
+    - name: http
+      port: 30000
