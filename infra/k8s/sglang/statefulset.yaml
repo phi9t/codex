@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sglang-worker
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: sglang-worker
+    app.kubernetes.io/part-of: codex-inference
+    codex-inference/role: aggregated
+spec:
+  serviceName: sglang-worker-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sglang-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sglang-worker
+        codex-inference/role: aggregated
+    spec:
+      # Schedule on GPU nodes only
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: sglang
+          image: lmsysorg/sglang:latest
+          command:
+            - python3
+            - -m
+            - sglang.launch_server
+          args:
+            - "--model-path"
+            - "$(MODEL_NAME)"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "$(SGLANG_PORT)"
+            - "--tp"
+            - "$(TENSOR_PARALLEL_SIZE)"
+            - "--mem-fraction-static"
+            - "$(SGLANG_MEM_FRACTION)"
+            - "--max-running-requests"
+            - "$(SGLANG_MAX_RUNNING_REQUESTS)"
+            - "--chunked-prefill-size"
+            - "$(SGLANG_CHUNKED_PREFILL_SIZE)"
+            - "--enable-metrics"
+          envFrom:
+            - configMapRef:
+                name: inference-config
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-credentials
+                  key: token
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 30000
+          # Model loading can take several minutes
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: "4"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: hf-cache
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi

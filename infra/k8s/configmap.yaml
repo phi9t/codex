@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-config
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+data:
+  # -- Model configuration --
+  MODEL_NAME: "Qwen/Qwen2.5-Coder-7B-Instruct"
+  TENSOR_PARALLEL_SIZE: "1"
+
+  # -- SGLang worker settings --
+  SGLANG_MEM_FRACTION: "0.85"
+  SGLANG_MAX_RUNNING_REQUESTS: "64"
+  SGLANG_CHUNKED_PREFILL_SIZE: "8192"
+  SGLANG_PORT: "30000"
+
+  # -- Dynamo frontend / router flags --
+  # KV-aware routing with durable events for multi-router consistency.
+  ROUTER_MODE: "kv"
+  DURABLE_KV_EVENTS: "true"
+  ROUTER_TRACK_OUTPUT_BLOCKS: "true"
+  ROUTER_TEMPERATURE: "0"
+
+  # -- Service addresses (set by K8s DNS) --
+  NATS_SERVER: "nats://nats.codex-inference.svc.cluster.local:4222"
+  ETCD_ENDPOINTS: "http://etcd.codex-inference.svc.cluster.local:2379"
+
+  # -- SGLang agentic workload flags --
+  # These enable priority-aware scheduling and cache eviction.
+  SGLANG_ENABLE_PRIORITY_SCHEDULING: "true"
+  SGLANG_RADIX_EVICTION_POLICY: "priority"
+  SGLANG_ENABLE_HIERARCHICAL_CACHE: "true"
+  SGLANG_HICACHE_WRITE_POLICY: "write_through"
