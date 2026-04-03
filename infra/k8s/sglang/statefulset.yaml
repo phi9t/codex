@@ -48,10 +48,10 @@ spec:
             - "$(SGLANG_CHUNKED_PREFILL_SIZE)"
             - "--enable-priority-scheduling"
             - "--radix-eviction-policy"
-            - "priority"
+            - "$(SGLANG_RADIX_EVICTION_POLICY)"
             - "--enable-hierarchical-cache"
             - "--hicache-write-policy"
-            - "write_through"
+            - "$(SGLANG_HICACHE_WRITE_POLICY)"
             - "--enable-metrics"
           envFrom:
             - configMapRef:
