@@ -304,28 +304,22 @@ docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 The overlay ships with `prometheus.yml` (scrapes SGLang and Dynamo metrics) and
 `grafana-datasources.yml` (auto-provisions Prometheus as default data source).
 
-### Kubernetes: Prometheus Operator
+### Kubernetes: Prometheus
 
-If your cluster has [prometheus-operator](https://prometheus-operator.dev/) installed,
-apply the ServiceMonitor resources to enable auto-discovery:
+`infra/k8s/monitoring/` deploys a self-contained Prometheus instance using only
+native Kubernetes objects (Deployment, ConfigMap, PVC, ServiceAccount, Role,
+RoleBinding, Service — no CRDs or operators required).
 
 ```bash
 kubectl apply -f infra/k8s/monitoring/
+# Access via port-forward:
+kubectl port-forward -n codex-inference svc/prometheus 9090:9090
 ```
 
-This creates `ServiceMonitor` objects for both `sglang-worker` and `dynamo-frontend`.
-Without prometheus-operator, scrape these endpoints directly from your Prometheus config:
-
-```yaml
-# prometheus.yml snippet
-scrape_configs:
-  - job_name: sglang
-    static_configs:
-      - targets: ["sglang-worker.codex-inference.svc.cluster.local:30000"]
-  - job_name: dynamo-frontend
-    static_configs:
-      - targets: ["dynamo-frontend.codex-inference.svc.cluster.local:8080"]
-```
+Prometheus discovers targets using `kubernetes_sd_configs` (service role) scoped
+to the `codex-inference` namespace. Any Service with the annotation
+`prometheus.io/scrape: "true"` is automatically scraped. Both `sglang-worker` and
+`dynamo-frontend` services carry this annotation.
 
 Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
 `dynamo_frontend_queued_requests`) on its metrics port.
@@ -384,7 +378,7 @@ infra/
       pdb.yaml                           # PodDisruptionBudget (minAvailable: 1)
       hpa.yaml                           # HorizontalPodAutoscaler (CPU 70%)
     monitoring/
-      servicemonitor.yaml                # Prometheus ServiceMonitors (prometheus-operator)
+      prometheus.yaml                    # Prometheus (Deployment, ConfigMap, RBAC, PVC, Service)
   codex-config/
     config.toml.example                  # Codex CLI provider config
     codex-env.sh                         # Shell env helper
