@@ -24,6 +24,10 @@ metadata:
   labels:
     app.kubernetes.io/name: sglang-worker
     app.kubernetes.io/part-of: codex-inference
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "30000"
+    prometheus.io/path: "/metrics"
 spec:
   type: ClusterIP
   selector:
