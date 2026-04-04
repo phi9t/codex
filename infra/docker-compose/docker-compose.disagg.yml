@@ -16,7 +16,7 @@ services:
   # Prefill worker: compute-bound, processes initial prompt tokens
   # ---------------------------------------------------------------------------
   sglang-prefill:
-    image: lmsysorg/sglang:latest
+    image: lmsysorg/sglang:${SGLANG_IMAGE_TAG:-v0.4.6}
     volumes:
       - hf-cache:/root/.cache/huggingface
     environment:
@@ -35,6 +35,8 @@ services:
         --radix-eviction-policy ${SGLANG_RADIX_EVICTION_POLICY:-priority}
         --enable-hierarchical-cache
         --hicache-write-policy ${SGLANG_HICACHE_WRITE_POLICY:-write_through}
+        --tool-call-parser ${SGLANG_TOOL_CALL_PARSER:-qwen25}
+        --watchdog-timeout ${SGLANG_WATCHDOG_TIMEOUT:-300}
         --enable-metrics
         --disaggregation-mode prefill
     ipc: host
@@ -63,7 +65,7 @@ services:
   # Decode worker: memory-bound, generates tokens one at a time
   # ---------------------------------------------------------------------------
   sglang-decode:
-    image: lmsysorg/sglang:latest
+    image: lmsysorg/sglang:${SGLANG_IMAGE_TAG:-v0.4.6}
     volumes:
       - hf-cache:/root/.cache/huggingface
     environment:
@@ -82,6 +84,8 @@ services:
         --radix-eviction-policy ${SGLANG_RADIX_EVICTION_POLICY:-priority}
         --enable-hierarchical-cache
         --hicache-write-policy ${SGLANG_HICACHE_WRITE_POLICY:-write_through}
+        --tool-call-parser ${SGLANG_TOOL_CALL_PARSER:-qwen25}
+        --watchdog-timeout ${SGLANG_WATCHDOG_TIMEOUT:-300}
         --enable-metrics
         --disaggregation-mode decode
     ipc: host

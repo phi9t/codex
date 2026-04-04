@@ -1,0 +1,41 @@
+# ServiceMonitor resources for prometheus-operator auto-discovery.
+# Requires the prometheus-operator CRDs to be installed in the cluster:
+#   kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/bundle.yaml
+#
+# If you don't use prometheus-operator, scrape these endpoints directly:
+#   - sglang-worker.codex-inference.svc.cluster.local:30000/metrics
+#   - dynamo-frontend.codex-inference.svc.cluster.local:8080/metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sglang-worker
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: sglang-worker
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sglang-worker
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dynamo-frontend
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: dynamo-frontend
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dynamo-frontend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
