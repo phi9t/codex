@@ -1,0 +1,47 @@
+# Ingress for external access to the Dynamo frontend.
+#
+# Prerequisites:
+#   An Ingress controller must be running in the cluster, e.g.:
+#     kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+#
+# TLS:
+#   Replace the tls.secretName value with a real certificate Secret, or use
+#   cert-manager to issue one automatically by adding the annotation:
+#     cert-manager.io/cluster-issuer: letsencrypt-prod
+#   and pointing tls[0].secretName at the generated Secret name.
+#
+# Usage without TLS (HTTP only):
+#   Remove the tls block and the ssl-redirect annotation below.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dynamo-frontend
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: dynamo-frontend
+    app.kubernetes.io/part-of: codex-inference
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Keep SSE / streaming connections alive through the proxy
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  # Replace with your actual hostname. For local testing use a /etc/hosts entry.
+  rules:
+    - host: inference.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dynamo-frontend
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - inference.example.com
+      # Create with: kubectl create secret tls dynamo-tls --cert=tls.crt --key=tls.key -n codex-inference
+      secretName: dynamo-tls

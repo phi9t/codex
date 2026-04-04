@@ -1,0 +1,285 @@
+# NetworkPolicy rules for the codex-inference namespace.
+#
+# Default posture: deny all ingress and egress within the namespace, then
+# selectively open only the required paths:
+#
+#   [clients outside namespace]
+#         │  :8080
+#         ▼
+#   dynamo-frontend ──:4222──► nats
+#         │  :2379──────────► etcd
+#         │  :30000─────────► sglang-worker
+#
+#   sglang-worker ───:4222──► nats
+#                    :2379──► etcd
+#
+#   prometheus ──────:30000─► sglang-worker  (scrape /metrics)
+#               ─────:8080──► dynamo-frontend (scrape /metrics)
+#
+# All pods may reach kube-dns (:53 UDP/TCP) for service discovery.
+---
+# Default deny all ingress and egress for every pod in the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow all pods to reach kube-dns for name resolution
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# dynamo-frontend: accept external client traffic on :8000
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dynamo-ingress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dynamo-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 8000
+---
+# dynamo-frontend: egress to sglang-worker, nats, etcd
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dynamo-egress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dynamo-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sglang-worker
+      ports:
+        - port: 30000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - port: 4222
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: etcd
+      ports:
+        - port: 2379
+---
+# sglang-worker: accept traffic from dynamo-frontend and prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-sglang-ingress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sglang-worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dynamo-frontend
+      ports:
+        - port: 30000
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 30000
+---
+# sglang-worker: egress to nats and etcd only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-sglang-egress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sglang-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - port: 4222
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: etcd
+      ports:
+        - port: 2379
+---
+# nats: accept traffic from dynamo-frontend and sglang-worker
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-nats-ingress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dynamo-frontend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sglang-worker
+      ports:
+        - port: 4222
+---
+# etcd: accept traffic from dynamo-frontend and sglang-worker
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-etcd-ingress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dynamo-frontend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sglang-worker
+      ports:
+        - port: 2379
+---
+# prometheus: accept scrape requests from grafana; egress to targets + K8s API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-ingress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-egress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sglang-worker
+      ports:
+        - port: 30000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dynamo-frontend
+      ports:
+        - port: 8000
+    # Kubernetes API server for kubernetes_sd_configs
+    - ports:
+        - port: 443
+        - port: 6443
+---
+# grafana: accept port-forward and ingress traffic; egress only to prometheus
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-egress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 9090

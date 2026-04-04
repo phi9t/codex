@@ -304,25 +304,52 @@ docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 The overlay ships with `prometheus.yml` (scrapes SGLang and Dynamo metrics) and
 `grafana-datasources.yml` (auto-provisions Prometheus as default data source).
 
-### Kubernetes: Prometheus
+### Kubernetes: Prometheus + Grafana
 
-`infra/k8s/monitoring/` deploys a self-contained Prometheus instance using only
+`infra/k8s/monitoring/` deploys a self-contained Prometheus + Grafana stack using only
 native Kubernetes objects (Deployment, ConfigMap, PVC, ServiceAccount, Role,
 RoleBinding, Service — no CRDs or operators required).
 
 ```bash
 kubectl apply -f infra/k8s/monitoring/
-# Access via port-forward:
+# Prometheus:
 kubectl port-forward -n codex-inference svc/prometheus 9090:9090
+# Grafana:
+kubectl port-forward -n codex-inference svc/grafana 3000:3000
 ```
 
 Prometheus discovers targets using `kubernetes_sd_configs` (service role) scoped
 to the `codex-inference` namespace. Any Service with the annotation
 `prometheus.io/scrape: "true"` is automatically scraped. Both `sglang-worker` and
-`dynamo-frontend` services carry this annotation.
+`dynamo-frontend` services carry this annotation. Grafana is pre-configured with
+Prometheus as the default datasource.
 
-Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
-`dynamo_frontend_queued_requests`) on its metrics port.
+### Kubernetes: Network Isolation
+
+`infra/k8s/netpol/` applies a default-deny NetworkPolicy and whitelists only the
+required traffic paths (clients → dynamo-frontend, dynamo → sglang/nats/etcd,
+sglang → nats/etcd, prometheus → targets). Requires a CNI plugin that enforces
+NetworkPolicy (Calico, Cilium, Weave, etc.).
+
+```bash
+kubectl apply -f infra/k8s/netpol/
+```
+
+### Kubernetes: External Access (Ingress)
+
+`infra/k8s/dynamo/ingress.yaml` exposes the Dynamo frontend via an Ingress
+controller. Edit the `host` and `tls.secretName` fields before applying:
+
+```bash
+# Install an Ingress controller if not already present (nginx example):
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+
+# Apply the Ingress (after editing the hostname):
+kubectl apply -f infra/k8s/dynamo/ingress.yaml
+```
+
+The Ingress sets `proxy-buffering: off` to ensure SSE streaming responses are not
+buffered by the proxy.
 
 ## Troubleshooting
 
@@ -377,8 +404,12 @@ infra/
       service.yaml                       # Dynamo service
       pdb.yaml                           # PodDisruptionBudget (minAvailable: 1)
       hpa.yaml                           # HorizontalPodAutoscaler (CPU 70%)
+      ingress.yaml                       # Ingress for external access (nginx)
+    netpol/
+      networkpolicy.yaml                 # Default-deny + per-component allow rules
     monitoring/
       prometheus.yaml                    # Prometheus (Deployment, ConfigMap, RBAC, PVC, Service)
+      grafana.yaml                       # Grafana (Deployment, ConfigMap, PVC, Service)
   codex-config/
     config.toml.example                  # Codex CLI provider config
     codex-env.sh                         # Shell env helper
