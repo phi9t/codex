@@ -33,3 +33,8 @@ data:
   SGLANG_RADIX_EVICTION_POLICY: "priority"
   SGLANG_ENABLE_HIERARCHICAL_CACHE: "true"
   SGLANG_HICACHE_WRITE_POLICY: "write_through"
+  # Tool call parsing: set to the parser matching your model family.
+  # qwen25 = Qwen2.5-Coder series; llama3 = Llama-3.x; mistral = Mistral series.
+  SGLANG_TOOL_CALL_PARSER: "qwen25"
+  # Watchdog: kill and restart the worker if inference stalls this many seconds.
+  SGLANG_WATCHDOG_TIMEOUT: "300"

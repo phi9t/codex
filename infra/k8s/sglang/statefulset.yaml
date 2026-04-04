@@ -26,7 +26,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: sglang
-          image: lmsysorg/sglang:latest
+          image: lmsysorg/sglang:v0.4.6
           command:
             - python3
             - -m
@@ -52,6 +52,10 @@ spec:
             - "--enable-hierarchical-cache"
             - "--hicache-write-policy"
             - "write_through"
+            - "--tool-call-parser"
+            - "$(SGLANG_TOOL_CALL_PARSER)"
+            - "--watchdog-timeout"
+            - "$(SGLANG_WATCHDOG_TIMEOUT)"
             - "--enable-metrics"
           envFrom:
             - configMapRef:
@@ -71,7 +75,7 @@ spec:
             httpGet:
               path: /health
               port: http
-            failureThreshold: 60
+            failureThreshold: 120
             periodSeconds: 10
           readinessProbe:
             httpGet:

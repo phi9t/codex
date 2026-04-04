@@ -124,12 +124,14 @@ docker compose -f docker-compose.yml -f docker-compose.disagg.yml up -d
 kubectl apply -f infra/k8s/namespace.yaml
 kubectl apply -f infra/k8s/configmap.yaml
 
-# Optional: create HuggingFace token secret
-kubectl create secret generic hf-credentials \
-  -n codex-inference \
-  --from-literal=token=YOUR_HF_TOKEN
+# Optional: create HuggingFace token secret (required for gated models)
+# Use the provided template — do NOT commit the filled-in file to git
+cp infra/k8s/hf-secret.yaml.example infra/k8s/hf-secret.yaml
+# Edit hf-secret.yaml and set your token, then:
+kubectl apply -f infra/k8s/hf-secret.yaml
 
-# Deploy infrastructure and workers
+# Deploy infrastructure: etcd, NATS, SGLang workers, Dynamo frontend
+kubectl apply -f infra/k8s/etcd/
 kubectl apply -f infra/k8s/nats/
 kubectl apply -f infra/k8s/sglang/
 kubectl apply -f infra/k8s/dynamo/
@@ -142,6 +144,17 @@ kubectl port-forward -n codex-inference svc/dynamo-frontend 8080:8080
 
 # Connect Codex
 CODEX_OSS_BASE_URL=http://localhost:8080/v1 codex --oss -m Qwen/Qwen2.5-Coder-7B-Instruct
+```
+
+### Kubernetes: Autoscaling and Availability
+
+The Dynamo frontend Deployment ships with a **HorizontalPodAutoscaler** (min 2 / max 8
+replicas, CPU target 70%) and a **PodDisruptionBudget** (`minAvailable: 1`) to ensure
+at least one frontend pod remains up during node drains and rolling updates.
+
+```bash
+# HPA and PDB are applied as part of infra/k8s/dynamo/
+kubectl -n codex-inference get hpa,pdb
 ```
 
 ## Connecting Codex CLI
@@ -244,11 +257,22 @@ These matter because coding-agent sessions are **write-once-read-many KV workloa
 after the first turn, 85-97% of tokens are cached prefix. Priority scheduling
 ensures interactive turns stay fast even when background analysis jobs are queued.
 
+Additional reliability and tool-use flags (enabled in all configurations):
+
+- **`--tool-call-parser qwen25`** — enables structured parsing of tool/function call
+  output from the model. Required for agentic tool use (file edits, shell execution,
+  web search). The parser must match the model family: `qwen25` for Qwen2.5-Coder,
+  `llama3` for Llama-3.x, `mistral` for Mistral series.
+- **`--watchdog-timeout 300`** — kills and restarts the worker process if inference
+  stalls for more than 300 seconds (catches GPU deadlocks and NCCL hangs silently).
+
 Tune via `.env` (Docker Compose) or the ConfigMap (Kubernetes):
 
 ```bash
 SGLANG_RADIX_EVICTION_POLICY=priority    # or "lru" for simpler behavior
 SGLANG_HICACHE_WRITE_POLICY=write_through # or "write_back" for lower host I/O
+SGLANG_TOOL_CALL_PARSER=qwen25           # match to your model family
+SGLANG_WATCHDOG_TIMEOUT=300             # seconds before stalled worker is restarted
 ```
 
 ## Observability
@@ -267,18 +291,44 @@ Key metrics to monitor:
 | GPU memory utilization | OOM risk |
 | Inflight requests | Concurrency load |
 
-Scrape with Prometheus:
+### Docker Compose: Prometheus + Grafana
+
+Add the monitoring overlay to any Compose stack:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000  (anonymous read-only)
+```
+
+The overlay ships with `prometheus.yml` (scrapes SGLang and Dynamo metrics) and
+`grafana-datasources.yml` (auto-provisions Prometheus as default data source).
+
+### Kubernetes: Prometheus Operator
+
+If your cluster has [prometheus-operator](https://prometheus-operator.dev/) installed,
+apply the ServiceMonitor resources to enable auto-discovery:
+
+```bash
+kubectl apply -f infra/k8s/monitoring/
+```
+
+This creates `ServiceMonitor` objects for both `sglang-worker` and `dynamo-frontend`.
+Without prometheus-operator, scrape these endpoints directly from your Prometheus config:
 
 ```yaml
 # prometheus.yml snippet
 scrape_configs:
   - job_name: sglang
     static_configs:
-      - targets: ["sglang-worker:30000"]  # or K8s service discovery
+      - targets: ["sglang-worker.codex-inference.svc.cluster.local:30000"]
+  - job_name: dynamo-frontend
+    static_configs:
+      - targets: ["dynamo-frontend.codex-inference.svc.cluster.local:8080"]
 ```
 
 Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
-`dynamo_frontend_queued_requests`) on its health/metrics port.
+`dynamo_frontend_queued_requests`) on its metrics port.
 
 ## Troubleshooting
 
@@ -312,9 +362,16 @@ infra/
     docker-compose.sglang-only.yml       # SGLang standalone (simplest)
     docker-compose.yml                   # Full Dynamo + SGLang stack
     docker-compose.disagg.yml            # PD disaggregation override
+    docker-compose.monitoring.yml        # Prometheus + Grafana overlay
+    prometheus.yml                       # Prometheus scrape config
+    grafana-datasources.yml              # Grafana datasource provisioning
   k8s/
     namespace.yaml                       # codex-inference namespace
     configmap.yaml                       # Shared configuration
+    hf-secret.yaml.example              # HuggingFace token secret template
+    etcd/
+      statefulset.yaml                   # etcd single-node (service discovery)
+      service.yaml                       # etcd services (headless + ClusterIP)
     nats/
       statefulset.yaml                   # NATS + JetStream
       service.yaml                       # NATS services
@@ -324,6 +381,10 @@ infra/
     dynamo/
       deployment.yaml                    # Dynamo frontend
       service.yaml                       # Dynamo service
+      pdb.yaml                           # PodDisruptionBudget (minAvailable: 1)
+      hpa.yaml                           # HorizontalPodAutoscaler (CPU 70%)
+    monitoring/
+      servicemonitor.yaml                # Prometheus ServiceMonitors (prometheus-operator)
   codex-config/
     config.toml.example                  # Codex CLI provider config
     codex-env.sh                         # Shell env helper

@@ -55,7 +55,7 @@ services:
   # SGLang inference worker (GPU required)
   # ---------------------------------------------------------------------------
   sglang-worker:
-    image: lmsysorg/sglang:latest
+    image: lmsysorg/sglang:${SGLANG_IMAGE_TAG:-v0.4.6}
     volumes:
       - hf-cache:/root/.cache/huggingface
     environment:
@@ -75,6 +75,8 @@ services:
         --radix-eviction-policy ${SGLANG_RADIX_EVICTION_POLICY:-priority}
         --enable-hierarchical-cache
         --hicache-write-policy ${SGLANG_HICACHE_WRITE_POLICY:-write_through}
+        --tool-call-parser ${SGLANG_TOOL_CALL_PARSER:-qwen25}
+        --watchdog-timeout ${SGLANG_WATCHDOG_TIMEOUT:-300}
         --enable-metrics
     ipc: host
     shm_size: "32g"
