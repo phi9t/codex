@@ -1,8 +1,12 @@
 # Native Kubernetes Prometheus deployment for scraping SGLang and Dynamo metrics.
-# Uses kubernetes_sd_configs to discover services annotated with:
+# Uses kubernetes_sd_configs (role: endpoints) to discover pods via their parent
+# Service annotations:
 #   prometheus.io/scrape: "true"
-#   prometheus.io/port: "<port>"
-#   prometheus.io/path: "<path>"   (defaults to /metrics)
+#   prometheus.io/port: "<container-port>"   ← pod/container port, not service port
+#   prometheus.io/path: "<path>"             ← defaults to /metrics
+#
+# role: endpoints resolves pod IPs directly, so podSelector NetworkPolicy egress
+# rules match without CNI-dependent kube-proxy DNAT behavior.
 #
 # No CRDs or operators required — all standard Kubernetes objects.
 ---
@@ -21,25 +25,29 @@ data:
       evaluation_interval: 15s
 
     scrape_configs:
-      # Discover services in the codex-inference namespace that have
-      # prometheus.io/scrape: "true" on their Service metadata.
-      - job_name: codex-inference-services
+      # Discover endpoints in the codex-inference namespace whose parent Service
+      # has prometheus.io/scrape: "true". Using role:endpoints rather than
+      # role:service so that Prometheus resolves pod IPs directly — this ensures
+      # podSelector-based NetworkPolicy egress rules match without relying on
+      # CNI-specific kube-proxy DNAT behavior.
+      - job_name: codex-inference-endpoints
         kubernetes_sd_configs:
-          - role: service
+          - role: endpoints
             namespaces:
               names: [codex-inference]
         relabel_configs:
-          # Drop services without the scrape annotation
+          # Drop endpoints whose parent Service lacks the scrape annotation
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
             action: keep
             regex: "true"
-          # Use the port from the annotation when present
+          # Override port from the annotation (must be the container/pod port,
+          # not the Service port, since we resolve pod IPs directly)
           - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
             action: replace
             target_label: __address__
             regex: (.+?)(?::\d+)?;(\d+)
             replacement: $1:$2
-          # Use the path from the annotation when present
+          # Override path from the annotation
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
             action: replace
             target_label: __metrics_path__

@@ -16,6 +16,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: nats
+        app.kubernetes.io/part-of: codex-inference
     spec:
       containers:
         - name: nats

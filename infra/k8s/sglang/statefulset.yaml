@@ -17,6 +17,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: sglang-worker
+        app.kubernetes.io/part-of: codex-inference
         codex-inference/role: aggregated
     spec:
       # Schedule on GPU nodes only
