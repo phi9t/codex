@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: codex-inference-quota
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  hard:
+    # CPU: supports up to ~8 SGLang workers (4 req each) + 4 Dynamo + overhead
+    requests.cpu: "32"
+    limits.cpu: "64"
+
+    # Memory: supports up to ~4 large-model workers (32Gi each) + frontends
+    requests.memory: 256Gi
+    limits.memory: 512Gi
+
+    # GPU: cap at 8 GPUs (adjust to match your node pool)
+    requests.nvidia.com/gpu: "8"
+    limits.nvidia.com/gpu: "8"
+
+    # Storage: 10 PVCs is generous for the current stack (etcd, NATS, SGLang, Prometheus)
+    persistentvolumeclaims: "10"
+
+    # Pod count: prevents runaway replicaset expansion
+    pods: "50"

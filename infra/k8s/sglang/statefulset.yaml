@@ -19,6 +19,8 @@ spec:
         app.kubernetes.io/name: sglang-worker
         codex-inference/role: aggregated
     spec:
+      serviceAccountName: sglang-worker
+      automountServiceAccountToken: false
       # Schedule on GPU nodes only
       tolerations:
         - key: nvidia.com/gpu
@@ -27,6 +29,11 @@ spec:
       containers:
         - name: sglang
           image: lmsysorg/sglang:v0.4.6
+          # SGLang/CUDA requires root and broad kernel access; we cannot apply
+          # runAsNonRoot or drop capabilities without risking GPU breakage.
+          # allowPrivilegeEscalation:false is safe and prevents setuid escalation.
+          securityContext:
+            allowPrivilegeEscalation: false
           command:
             - python3
             - -m

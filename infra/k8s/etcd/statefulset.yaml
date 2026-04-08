@@ -18,6 +18,14 @@ spec:
         app.kubernetes.io/name: etcd
         app.kubernetes.io/part-of: codex-inference
     spec:
+      serviceAccountName: etcd
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: etcd
           image: bitnami/etcd:3.5
@@ -30,6 +38,10 @@ spec:
               value: "http://0.0.0.0:2379"
             - name: ETCD_DATA_DIR
               value: "/bitnami/etcd/data"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           ports:
             - name: client
               containerPort: 2379

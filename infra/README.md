@@ -124,6 +124,11 @@ docker compose -f docker-compose.yml -f docker-compose.disagg.yml up -d
 kubectl apply -f infra/k8s/namespace.yaml
 kubectl apply -f infra/k8s/configmap.yaml
 
+# Apply security hardening (NetworkPolicy, ResourceQuota, ServiceAccounts)
+kubectl apply -f infra/k8s/network-policy.yaml
+kubectl apply -f infra/k8s/resource-quota.yaml
+kubectl apply -f infra/k8s/serviceaccounts.yaml
+
 # Optional: create HuggingFace token secret (required for gated models)
 # Use the provided template — do NOT commit the filled-in file to git
 cp infra/k8s/hf-secret.yaml.example infra/k8s/hf-secret.yaml
@@ -275,6 +280,74 @@ SGLANG_TOOL_CALL_PARSER=qwen25           # match to your model family
 SGLANG_WATCHDOG_TIMEOUT=300             # seconds before stalled worker is restarted
 ```
 
+## Security Hardening
+
+### Kubernetes
+
+The Kubernetes manifests implement defense-in-depth at the namespace level:
+
+**NetworkPolicy** (`infra/k8s/network-policy.yaml`)
+
+Default-deny-ingress for the entire namespace, then explicit allow rules for
+each required traffic path. Only these paths are open:
+
+| Source | Destination | Port | Purpose |
+|--------|-------------|------|---------|
+| dynamo-frontend | sglang-worker | 30000 | Inference requests |
+| dynamo-frontend | nats | 4222 | KV events / load metrics |
+| dynamo-frontend | etcd | 2379 | Service discovery |
+| sglang-worker | nats | 4222 | KV events / load metrics |
+| sglang-worker | etcd | 2379 | Service registration |
+| sglang-worker | 0.0.0.0 | 443 | HuggingFace model download |
+| prometheus | sglang-worker | 30000 | Metrics scrape |
+| prometheus | dynamo-frontend | 8000 | Metrics scrape |
+| prometheus | nats | 8222 | Monitor scrape |
+| prometheus | K8s API | 443/6443 | Service discovery |
+| external | dynamo-frontend | 8000 | Inference API |
+| external | prometheus | 9090 | Port-forward access |
+
+Once models are cached in the PVC, remove the `allow-sglang-egress` policy's
+`port: 443` rule to eliminate internet egress from SGLang pods entirely.
+
+**SecurityContext**
+
+All pods run with the minimum privileges their workload requires:
+
+| Component | runAsNonRoot | User | Drop ALL caps | allowPrivEscalation |
+|-----------|-------------|------|--------------|---------------------|
+| etcd | yes | 1001 | yes | false |
+| nats | yes | 1000 | yes | false |
+| dynamo-frontend | — | — | yes | false |
+| sglang-worker | — | — | — | false |
+| prometheus | yes | 65534 | yes | false |
+
+SGLang is conservative: CUDA/GPU drivers can require root and broad syscall
+access. `allowPrivilegeEscalation: false` is applied; full capability drops are
+not, as they can break GPU context creation on some driver versions.
+
+**ServiceAccounts** (`infra/k8s/serviceaccounts.yaml`)
+
+Each workload has a dedicated ServiceAccount with `automountServiceAccountToken:
+false`. None of these services need Kubernetes API access; isolating them
+prevents a compromised pod from using a mounted token to enumerate or modify
+cluster state.
+
+**ResourceQuota** (`infra/k8s/resource-quota.yaml`)
+
+Namespace-level quota caps CPU, memory, GPU, PVC count, and pod count. Adjust
+`requests.nvidia.com/gpu` and `limits.nvidia.com/gpu` to match your node pool.
+
+### Docker Compose
+
+For local development, non-GPU services (etcd, NATS, dynamo-frontend,
+Prometheus) run with:
+
+- `security_opt: [no-new-privileges:true]` — prevents setuid/setgid escalation
+- `user:` set to the image's non-root UID (etcd: 1001, NATS: 1000, Prometheus: 65534)
+- `deploy.resources.limits` — memory and CPU caps to prevent runaway containers
+- NATS monitor port 8222 is not exposed on the host (Prometheus scrapes it
+  internally via the Docker network)
+
 ## Observability
 
 SGLang workers expose a Prometheus-compatible `/metrics` endpoint when launched
@@ -304,7 +377,7 @@ docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 The overlay ships with `prometheus.yml` (scrapes SGLang and Dynamo metrics) and
 `grafana-datasources.yml` (auto-provisions Prometheus as default data source).
 
-### Kubernetes: Prometheus
+### Kubernetes: Prometheus + Alerting
 
 `infra/k8s/monitoring/` deploys a self-contained Prometheus instance using only
 native Kubernetes objects (Deployment, ConfigMap, PVC, ServiceAccount, Role,
@@ -314,6 +387,8 @@ RoleBinding, Service — no CRDs or operators required).
 kubectl apply -f infra/k8s/monitoring/
 # Access via port-forward:
 kubectl port-forward -n codex-inference svc/prometheus 9090:9090
+# Verify alerting rules loaded:
+# browse http://localhost:9090/rules → should show the codex-inference group
 ```
 
 Prometheus discovers targets using `kubernetes_sd_configs` (service role) scoped
@@ -323,6 +398,23 @@ to the `codex-inference` namespace. Any Service with the annotation
 
 Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
 `dynamo_frontend_queued_requests`) on its metrics port.
+
+**Alerting rules** (`infra/k8s/monitoring/prometheus-alerts.yaml`) define four alerts:
+
+| Alert | Condition | Severity |
+|-------|-----------|---------|
+| `SGLangWorkerDown` | No healthy worker for 2 min | critical |
+| `DynamoFrontendDown` | No healthy frontend for 1 min | critical |
+| `HighQueueDepth` | Queued requests > 100 for 5 min | warning |
+| `HighInflightRequests` | Inflight requests > 200 for 10 min | warning |
+| `SGLangWorkerRestarting` | Container restart detected | warning |
+
+`SGLangWorkerRestarting` uses `kube_pod_container_status_restarts_total` from
+kube-state-metrics. If your cluster doesn't have it, use the fallback expr
+documented in `prometheus-alerts.yaml`: `changes(up{service="sglang-worker"}[10m]) > 1`.
+
+To connect an Alertmanager, add `alerting:` and `alertmanagers:` sections to the
+`prometheus-config` ConfigMap and `kubectl rollout restart deployment/prometheus`.
 
 ## Troubleshooting
 
@@ -363,6 +455,9 @@ infra/
     namespace.yaml                       # codex-inference namespace
     configmap.yaml                       # Shared configuration
     hf-secret.yaml.example              # HuggingFace token secret template
+    network-policy.yaml                  # NetworkPolicy: default-deny + allow rules
+    resource-quota.yaml                  # ResourceQuota: CPU, memory, GPU, pod caps
+    serviceaccounts.yaml                 # Dedicated ServiceAccounts (no token automount)
     etcd/
       statefulset.yaml                   # etcd single-node (service discovery)
       service.yaml                       # etcd services (headless + ClusterIP)
@@ -379,6 +474,7 @@ infra/
       hpa.yaml                           # HorizontalPodAutoscaler (CPU 70%)
     monitoring/
       prometheus.yaml                    # Prometheus (Deployment, ConfigMap, RBAC, PVC, Service)
+      prometheus-alerts.yaml             # Alerting rules ConfigMap (worker down, queue depth)
   codex-config/
     config.toml.example                  # Codex CLI provider config
     codex-env.sh                         # Shell env helper
