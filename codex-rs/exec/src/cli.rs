@@ -1,10 +1,15 @@
+use clap::Args;
+use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
-use codex_common::CliConfigOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(version)]
+#[command(
+    version,
+    override_usage = "codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]"
+)]
 pub struct Cli {
     /// Action to perform. If omitted, runs a new non-interactive session.
     #[command(subcommand)]
@@ -28,7 +33,7 @@ pub struct Cli {
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
-    /// Specify which local provider to use (lmstudio, ollama, or ollama-chat).
+    /// Specify which local provider to use (lmstudio or ollama).
     /// If not specified with --oss, will use config default or show selection.
     #[arg(long = "local-provider")]
     pub oss_provider: Option<String>,
@@ -36,13 +41,13 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<codex_utils_cli::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-request, --sandbox workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (--sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
 
@@ -69,6 +74,10 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Run without persisting session files to disk.
+    #[arg(long = "ephemeral", global = true, default_value_t = false)]
+    pub ephemeral: bool,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
@@ -90,11 +99,17 @@ pub struct Cli {
     pub json: bool,
 
     /// Specifies file where the last message from the agent should be written.
-    #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
+    #[arg(
+        long = "output-last-message",
+        short = 'o',
+        value_name = "FILE",
+        global = true
+    )]
     pub last_message_file: Option<PathBuf>,
 
     /// Initial instructions for the agent. If not provided as an argument (or
-    /// if `-` is used), instructions are read from stdin.
+    /// if `-` is used), instructions are read from stdin. If stdin is piped and
+    /// a prompt is also provided, stdin is appended as a `<stdin>` block.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }
@@ -108,16 +123,22 @@ pub enum Command {
     Review(ReviewArgs),
 }
 
-#[derive(Parser, Debug)]
-pub struct ResumeArgs {
-    /// Conversation/session id (UUID). When provided, resumes this session.
+#[derive(Args, Debug)]
+struct ResumeArgsRaw {
+    // Note: This is the direct clap shape. We reinterpret the positional when --last is set
+    // so "codex resume --last <prompt>" treats the positional as a prompt, not a session id.
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
-    pub session_id: Option<String>,
+    session_id: Option<String>,
 
     /// Resume the most recent recorded session (newest) without specifying an id.
     #[arg(long = "last", default_value_t = false)]
-    pub last: bool,
+    last: bool,
+
+    /// Show all sessions (disables cwd filtering).
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
 
     /// Optional image(s) to attach to the prompt sent after resuming.
     #[arg(
@@ -127,11 +148,70 @@ pub struct ResumeArgs {
         value_delimiter = ',',
         num_args = 1
     )]
-    pub images: Vec<PathBuf>,
+    images: Vec<PathBuf>,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
+    prompt: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ResumeArgs {
+    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
+    /// If omitted, use --last to pick the most recent recorded session.
+    pub session_id: Option<String>,
+
+    /// Resume the most recent recorded session (newest) without specifying an id.
+    pub last: bool,
+
+    /// Show all sessions (disables cwd filtering).
+    pub all: bool,
+
+    /// Optional image(s) to attach to the prompt sent after resuming.
+    pub images: Vec<PathBuf>,
+
+    /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     pub prompt: Option<String>,
+}
+
+impl From<ResumeArgsRaw> for ResumeArgs {
+    fn from(raw: ResumeArgsRaw) -> Self {
+        // When --last is used without an explicit prompt, treat the positional as the prompt
+        // (clap can’t express this conditional positional meaning cleanly).
+        let (session_id, prompt) = if raw.last && raw.prompt.is_none() {
+            (None, raw.session_id)
+        } else {
+            (raw.session_id, raw.prompt)
+        };
+        Self {
+            session_id,
+            last: raw.last,
+            all: raw.all,
+            images: raw.images,
+            prompt,
+        }
+    }
+}
+
+impl Args for ResumeArgs {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        ResumeArgsRaw::augment_args(cmd)
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        ResumeArgsRaw::augment_args_for_update(cmd)
+    }
+}
+
+impl FromArgMatches for ResumeArgs {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        ResumeArgsRaw::from_arg_matches(matches).map(Self::from)
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        *self = ResumeArgsRaw::from_arg_matches(matches).map(Self::from)?;
+        Ok(())
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -177,3 +257,7 @@ pub enum Color {
     #[default]
     Auto,
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;

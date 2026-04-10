@@ -19,7 +19,7 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -29,7 +29,7 @@ use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
-pub(crate) struct BetaFeatureItem {
+pub(crate) struct ExperimentalFeatureItem {
     pub feature: Feature,
     pub name: String,
     pub description: String,
@@ -37,7 +37,7 @@ pub(crate) struct BetaFeatureItem {
 }
 
 pub(crate) struct ExperimentalFeaturesView {
-    features: Vec<BetaFeatureItem>,
+    features: Vec<ExperimentalFeatureItem>,
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
@@ -46,11 +46,14 @@ pub(crate) struct ExperimentalFeaturesView {
 }
 
 impl ExperimentalFeaturesView {
-    pub(crate) fn new(features: Vec<BetaFeatureItem>, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        features: Vec<ExperimentalFeatureItem>,
+        app_event_tx: AppEventSender,
+    ) -> Self {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Experimental features".bold()));
         header.push(Line::from(
-            "Toggle beta features. Changes are saved to config.toml.".dim(),
+            "Toggle experimental features. Changes are saved to config.toml.".dim(),
         ));
 
         let mut view = Self {
@@ -172,11 +175,16 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 ..
             } => self.move_down(),
             KeyEvent {
-                code: KeyCode::Enter,
+                code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.toggle_selected(),
             KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
@@ -235,7 +243,7 @@ impl Renderable for ExperimentalFeaturesView {
             Constraint::Max(1),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
 
         self.header.render(header_area, buf);
 
@@ -284,9 +292,9 @@ impl Renderable for ExperimentalFeaturesView {
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),
+        key_hint::plain(KeyCode::Char(' ')).into(),
+        " to select or ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to toggle or ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
         " to save for next conversation".into(),
     ])
 }

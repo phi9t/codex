@@ -3,6 +3,9 @@ use app_test_support::McpProcess;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
+use codex_app_server_protocol::AppConfig;
+use codex_app_server_protocol::AppToolApproval;
+use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
@@ -18,7 +21,12 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
-use codex_core::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX;
+use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::TrustLevel;
+use codex_protocol::config_types::WebSearchContextSize;
+use codex_protocol::config_types::WebSearchLocation;
+use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -53,6 +61,7 @@ sandbox_mode = "workspace-write"
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -87,8 +96,11 @@ async fn config_read_includes_tools() -> Result<()> {
         r#"
 model = "gpt-user"
 
+[tools.web_search]
+context_size = "low"
+allowed_domains = ["example.com"]
+
 [tools]
-web_search = true
 view_image = false
 "#,
     )?;
@@ -101,6 +113,7 @@ view_image = false
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -118,12 +131,28 @@ view_image = false
     assert_eq!(
         tools,
         ToolsV2 {
-            web_search: Some(true),
+            web_search: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::Low),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: None,
+            }),
             view_image: Some(false),
         }
     );
     assert_eq!(
-        origins.get("tools.web_search").expect("origin").name,
+        origins
+            .get("tools.web_search.context_size")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("tools.web_search.allowed_domains.0")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
@@ -137,6 +166,215 @@ view_image = false
 
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_nested_web_search_tool_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+web_search = "live"
+
+[tools.web_search]
+context_size = "high"
+allowed_domains = ["example.com"]
+location = { country = "US", city = "New York", timezone = "America/New_York" }
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.tools.expect("tools present").web_search,
+        Some(WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: Some(vec!["example.com".to_string()]),
+            location: Some(WebSearchLocation {
+                country: Some("US".to_string()),
+                region: None,
+                city: Some("New York".to_string()),
+                timezone: Some("America/New_York".to_string()),
+            }),
+        }),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_ignores_bool_web_search_tool_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[tools]
+web_search = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(config.tools.expect("tools present").web_search, None,);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_apps() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[apps.app1]
+enabled = false
+destructive_enabled = false
+default_tools_approval_mode = "prompt"
+"#,
+    )?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(
+        config.apps,
+        Some(AppsConfig {
+            default: None,
+            apps: std::collections::HashMap::from([(
+                "app1".to_string(),
+                AppConfig {
+                    enabled: false,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: None,
+                    default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        })
+    );
+    assert_eq!(
+        origins.get("apps.app1.enabled").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.destructive_enabled")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.default_tools_approval_mode")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+
+    let layers = layers.expect("layers present");
+    assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, r#"model = "gpt-user""#)?;
+
+    let workspace = TempDir::new()?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"
+model_reasoning_effort = "high"
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+    let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config, origins, ..
+    } = to_response(resp)?;
+
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        origins.get("model_reasoning_effort").expect("origin").name,
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_config
+        }
+    );
 
     Ok(())
 }
@@ -195,6 +433,7 @@ writable_roots = [{}]
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -281,6 +520,7 @@ model = "gpt-old"
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -306,7 +546,7 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
-    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home);
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert_eq!(write.file_path, expected_file_path);
@@ -315,6 +555,7 @@ model = "gpt-old"
     let verify_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let verify_resp: JSONRPCResponse = timeout(
@@ -396,6 +637,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
                 },
             ],
             expected_version: None,
+            reload_user_config: false,
         })
         .await?;
     let batch_resp: JSONRPCResponse = timeout(
@@ -405,12 +647,13 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home);
     assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -435,18 +678,22 @@ fn assert_layers_user_then_optional_system(
     layers: &[codex_app_server_protocol::ConfigLayer],
     user_file: AbsolutePathBuf,
 ) -> Result<()> {
-    if cfg!(unix) {
-        let system_file = AbsolutePathBuf::from_absolute_path(SYSTEM_CONFIG_TOML_FILE_UNIX)?;
-        assert_eq!(layers.len(), 2);
-        assert_eq!(layers[0].name, ConfigLayerSource::User { file: user_file });
-        assert_eq!(
-            layers[1].name,
-            ConfigLayerSource::System { file: system_file }
-        );
-    } else {
-        assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0].name, ConfigLayerSource::User { file: user_file });
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
     }
+    assert_eq!(layers.len(), first_index + 2);
+    assert_eq!(
+        layers[first_index].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::System { .. }
+    ));
     Ok(())
 }
 
@@ -455,25 +702,25 @@ fn assert_layers_managed_user_then_optional_system(
     managed_file: AbsolutePathBuf,
     user_file: AbsolutePathBuf,
 ) -> Result<()> {
-    if cfg!(unix) {
-        let system_file = AbsolutePathBuf::from_absolute_path(SYSTEM_CONFIG_TOML_FILE_UNIX)?;
-        assert_eq!(layers.len(), 3);
-        assert_eq!(
-            layers[0].name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-        );
-        assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
-        assert_eq!(
-            layers[2].name,
-            ConfigLayerSource::System { file: system_file }
-        );
-    } else {
-        assert_eq!(layers.len(), 2);
-        assert_eq!(
-            layers[0].name,
-            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
-        );
-        assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
     }
+    assert_eq!(layers.len(), first_index + 3);
+    assert_eq!(
+        layers[first_index].name,
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
+    );
+    assert_eq!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 2].name,
+        ConfigLayerSource::System { .. }
+    ));
     Ok(())
 }

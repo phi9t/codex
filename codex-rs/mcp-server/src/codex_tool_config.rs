@@ -1,19 +1,21 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::protocol::AskForApproval;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::protocol::AskForApproval;
 use codex_utils_json_to_toml::json_to_toml;
-use mcp_types::Tool;
-use mcp_types::ToolInputSchema;
+use rmcp::model::JsonObject;
+use rmcp::model::Tool;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -114,25 +116,36 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
 
-    #[expect(clippy::expect_used)]
-    let schema_value =
-        serde_json::to_value(&schema).expect("Codex tool schema should serialise to JSON");
-
-    let tool_input_schema =
-        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
-            panic!("failed to create Tool from schema: {e}");
-        });
+    let input_schema = create_tool_input_schema(schema, "Codex tool schema should serialize");
 
     Tool {
-        name: "codex".to_string(),
+        name: "codex".into(),
         title: Some("Codex".to_string()),
-        input_schema: tool_input_schema,
-        // TODO(mbolin): This should be defined.
-        output_schema: None,
+        input_schema,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
+            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct."
+                .into(),
         ),
         annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    }
+}
+
+fn codex_tool_output_schema() -> Arc<JsonObject> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "threadId": { "type": "string" },
+            "content": { "type": "string" }
+        },
+        "required": ["threadId", "content"],
+    });
+    match schema {
+        serde_json::Value::Object(map) => Arc::new(map),
+        _ => unreachable!("json literal must be an object"),
     }
 }
 
@@ -141,7 +154,7 @@ impl CodexToolCallParam {
     /// effective Config object generated from the supplied parameters.
     pub async fn into_config(
         self,
-        codex_linux_sandbox_exe: Option<PathBuf>,
+        arg0_paths: Arg0DispatchPaths,
     ) -> std::io::Result<(String, Config)> {
         let Self {
             prompt,
@@ -163,7 +176,9 @@ impl CodexToolCallParam {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_mode: sandbox.map(Into::into),
-            codex_linux_sandbox_exe,
+            codex_self_exe: arg0_paths.codex_self_exe.clone(),
+            codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
             developer_instructions,
             compact_prompt,
@@ -226,25 +241,45 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallReplyParam>();
 
-    #[expect(clippy::expect_used)]
-    let schema_value =
-        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
-
-    let tool_input_schema =
-        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
-            panic!("failed to create Tool from schema: {e}");
-        });
+    let input_schema = create_tool_input_schema(schema, "Codex reply tool schema should serialize");
 
     Tool {
-        name: "codex-reply".to_string(),
+        name: "codex-reply".into(),
         title: Some("Codex Reply".to_string()),
-        input_schema: tool_input_schema,
-        output_schema: None,
+        input_schema,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Continue a Codex conversation by providing the thread id and prompt.".to_string(),
+            "Continue a Codex conversation by providing the thread id and prompt.".into(),
         ),
         annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
     }
+}
+
+fn create_tool_input_schema(
+    schema: schemars::schema::RootSchema,
+    panic_message: &str,
+) -> Arc<JsonObject> {
+    #[expect(clippy::expect_used)]
+    let schema_value = serde_json::to_value(&schema).expect(panic_message);
+    let mut schema_object = match schema_value {
+        serde_json::Value::Object(object) => object,
+        _ => panic!("tool schema should serialize to a JSON object"),
+    };
+
+    // Prefer keeping the "core" JSON Schema keys while still preserving `$defs`
+    // in case any `$ref` leaks into the generated schema (even though we try
+    // to inline subschemas).
+    let mut input_schema = JsonObject::new();
+    for key in ["properties", "required", "type", "$defs", "definitions"] {
+        if let Some(value) = schema_object.remove(key) {
+            input_schema.insert(key.to_string(), value);
+        }
+    }
+
+    Arc::new(input_schema)
 }
 
 #[cfg(test)]
@@ -330,6 +365,21 @@ mod tests {
             "type": "object"
           },
           "name": "codex",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex"
         });
         assert_eq!(expected_tool_json, tool_json);
@@ -362,6 +412,21 @@ mod tests {
             "type": "object",
           },
           "name": "codex-reply",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);

@@ -1,0 +1,46 @@
+# =============================================================================
+# Codex CLI configuration for self-hosted Dynamo + SGLang inference
+# =============================================================================
+# Copy this file to ~/.codex/config.toml (or merge with your existing config).
+#
+# Three provider options are defined below. Uncomment the model_provider line
+# for the one you want to use.
+
+# -- Select which provider to use (uncomment one) --
+# model_provider = "dynamo-sglang"     # Full Dynamo stack (docker-compose.yml)
+# model_provider = "sglang-direct"     # SGLang standalone (docker-compose.sglang-only.yml)
+
+# -- Model name (must match what the server is running) --
+model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+# =============================================================================
+# Provider: Dynamo frontend (recommended for production / multi-worker)
+# =============================================================================
+# Connects to the Dynamo frontend which handles routing, KV-aware worker
+# selection, and request queueing. Use with docker-compose.yml or Kubernetes.
+[model_providers.dynamo-sglang]
+name = "Dynamo+SGLang"
+base_url = "http://localhost:8080/v1"
+wire_api = "chat"
+
+# =============================================================================
+# Provider: SGLang direct (simplest path for local dev)
+# =============================================================================
+# Connects directly to a standalone SGLang server. No Dynamo, NATS, or etcd
+# needed. Use with docker-compose.sglang-only.yml.
+[model_providers.sglang-direct]
+name = "SGLang Direct"
+base_url = "http://localhost:30000/v1"
+wire_api = "chat"
+
+# =============================================================================
+# Profiles (optional convenience bundles)
+# =============================================================================
+# Use with: codex --profile local-dynamo
+[profiles.local-dynamo]
+model_provider = "dynamo-sglang"
+model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+[profiles.local-sglang]
+model_provider = "sglang-direct"
+model = "Qwen/Qwen2.5-Coder-7B-Instruct"
