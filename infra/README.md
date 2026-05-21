@@ -351,7 +351,10 @@ The Kubernetes manifests pin non-root UIDs via `securityContext` + `fsGroup`,
 which fixes volume ownership automatically. Plain Docker Compose has no `fsGroup`
 equivalent, so containers use each image's built-in default user rather than a
 forced `user:` override (a forced non-root UID can't write a freshly created,
-root-owned named volume on first boot).
+root-owned named volume on first boot). In practice `bitnami/etcd` (uid 1001)
+and `prom/prometheus` (nobody) already default to non-root; `nats:2.10` defaults
+to root, so for stricter setups run it under an orchestrator that provides
+`fsGroup` (e.g. the Kubernetes manifests here, where NATS is fully hardened).
 
 ## Observability
 

@@ -7,15 +7,17 @@ metadata:
     app.kubernetes.io/part-of: codex-inference
 spec:
   hard:
-    # CPU: supports up to ~8 SGLang workers (4 req each) + 4 Dynamo + overhead
+    # Guardrails sized for the documented scaling ceiling — roughly 3 SGLang
+    # workers plus the Dynamo HPA max of 8 frontends — with headroom. requests
+    # is the binding cap; the 8-GPU limit below bounds the worker fleet anyway.
+    # Raise all dimensions for larger fleets.
     requests.cpu: "32"
-    limits.cpu: "64"
+    limits.cpu: "80"
 
-    # Memory: supports up to ~4 large-model workers (32Gi each) + frontends
     requests.memory: 256Gi
     limits.memory: 512Gi
 
-    # GPU: cap at 8 GPUs (adjust to match your node pool)
+    # GPU: one per SGLang worker, so this caps the fleet at 8. Match your node pool.
     requests.nvidia.com/gpu: "8"
     limits.nvidia.com/gpu: "8"
 

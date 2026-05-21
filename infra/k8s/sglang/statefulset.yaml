@@ -104,9 +104,11 @@ spec:
             limits:
               # cpu/memory limits are required: the namespace ResourceQuota
               # constrains limits.cpu/limits.memory, so every pod must set them.
-              # memory headroom above the request covers HiCache host-tier KV.
+              # memory limit bounds request (32Gi) + the memory-backed /dev/shm
+              # emptyDir (32Gi, charged to this cgroup) so a full shm plus
+              # HiCache host-tier KV cannot OOM the container.
               cpu: "8"
-              memory: 48Gi
+              memory: 64Gi
               nvidia.com/gpu: "1"
           volumeMounts:
             - name: hf-cache
