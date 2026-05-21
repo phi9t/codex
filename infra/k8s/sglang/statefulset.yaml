@@ -102,6 +102,11 @@ spec:
               memory: 32Gi
               nvidia.com/gpu: "1"
             limits:
+              # cpu/memory limits are required: the namespace ResourceQuota
+              # constrains limits.cpu/limits.memory, so every pod must set them.
+              # memory headroom above the request covers HiCache host-tier KV.
+              cpu: "8"
+              memory: 48Gi
               nvidia.com/gpu: "1"
           volumeMounts:
             - name: hf-cache

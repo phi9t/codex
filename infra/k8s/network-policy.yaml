@@ -2,7 +2,11 @@
 # NetworkPolicy: least-privilege pod communication for codex-inference
 # =============================================================================
 # Strategy: default-deny all ingress, then open only the required paths.
-# Egress is allowed by default except where explicitly restricted below.
+# Egress: every workload below is selected by an egress policy, so once these
+# are applied each pod is default-deny for egress and may only reach the
+# destinations explicitly listed (etcd/nats get DNS only — they initiate no
+# other outbound connections). A pod with no matching egress policy would keep
+# unrestricted egress, but all current components are covered.
 #
 # Traffic matrix:
 #   dynamo-frontend  → sglang-worker:30000     (inference)
@@ -15,6 +19,7 @@
 #   prometheus       → dynamo-frontend:8000    (metrics scrape)
 #   prometheus       → nats:8222              (monitor scrape)
 #   prometheus       → k8s-api:443/6443        (service discovery)
+#   etcd, nats       → kube-dns:53             (DNS only)
 #   external clients → dynamo-frontend:8000    (inference API)
 #   external clients → prometheus:9090         (kubectl port-forward)
 
@@ -321,4 +326,31 @@ spec:
               app.kubernetes.io/name: nats
       ports:
         - port: 8222
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 10. etcd + nats egress: DNS only. These single-node infra components serve
+#     clients (ingress above) but initiate no outbound connections of their
+#     own, so locking egress to DNS completes namespace-wide least-privilege.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-infra-egress
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [etcd, nats]
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
           protocol: TCP

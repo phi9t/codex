@@ -16,7 +16,6 @@ services:
   # ---------------------------------------------------------------------------
   etcd:
     image: bitnami/etcd:3.5
-    user: "1001:1001"
     security_opt:
       - no-new-privileges:true
     environment:
@@ -47,7 +46,6 @@ services:
   # ---------------------------------------------------------------------------
   nats:
     image: nats:2.10
-    user: "1000:1000"
     security_opt:
       - no-new-privileges:true
     command: ["--js", "--sd", "/data/nats", "-m", "8222"]

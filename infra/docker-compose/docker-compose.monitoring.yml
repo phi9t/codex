@@ -15,7 +15,6 @@
 services:
   prometheus:
     image: prom/prometheus:v2.51.0
-    user: "65534:65534"
     security_opt:
       - no-new-privileges:true
     command:

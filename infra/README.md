@@ -343,10 +343,15 @@ For local development, non-GPU services (etcd, NATS, dynamo-frontend,
 Prometheus) run with:
 
 - `security_opt: [no-new-privileges:true]` — prevents setuid/setgid escalation
-- `user:` set to the image's non-root UID (etcd: 1001, NATS: 1000, Prometheus: 65534)
 - `deploy.resources.limits` — memory and CPU caps to prevent runaway containers
 - NATS monitor port 8222 is not exposed on the host (Prometheus scrapes it
   internally via the Docker network)
+
+The Kubernetes manifests pin non-root UIDs via `securityContext` + `fsGroup`,
+which fixes volume ownership automatically. Plain Docker Compose has no `fsGroup`
+equivalent, so containers use each image's built-in default user rather than a
+forced `user:` override (a forced non-root UID can't write a freshly created,
+root-owned named volume on first boot).
 
 ## Observability
 
@@ -399,7 +404,7 @@ to the `codex-inference` namespace. Any Service with the annotation
 Dynamo frontend also exposes metrics (`dynamo_frontend_inflight_requests`,
 `dynamo_frontend_queued_requests`) on its metrics port.
 
-**Alerting rules** (`infra/k8s/monitoring/prometheus-alerts.yaml`) define four alerts:
+**Alerting rules** (`infra/k8s/monitoring/prometheus-alerts.yaml`) define five alerts:
 
 | Alert | Condition | Severity |
 |-------|-----------|---------|
