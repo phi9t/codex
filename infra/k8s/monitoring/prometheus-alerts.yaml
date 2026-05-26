@@ -1,0 +1,112 @@
+# =============================================================================
+# Prometheus alerting rules for the codex-inference stack.
+#
+# Applied as a second ConfigMap and mounted into the Prometheus pod at
+# /etc/prometheus/rules/alerts.yml (see prometheus.yaml for the mount and
+# the rule_files reference).
+#
+# Metric sources:
+#   - sglang-worker:30000/metrics  (SGLang inference metrics)
+#   - dynamo-frontend:8000/metrics (Dynamo router metrics: inflight, queued)
+#   - up{}                         (synthetic scrape-health metric, always present)
+#
+# Note on SGLangWorkerRestarting: this alert uses
+#   kube_pod_container_status_restarts_total from kube-state-metrics.
+# If your cluster does not have kube-state-metrics, replace the expr with
+# the fallback below that uses only the 'up' time-series:
+#   expr: changes(up{service="sglang-worker"}[10m]) > 1
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: codex-inference
+data:
+  alerts.yml: |
+    groups:
+      - name: codex-inference
+        rules:
+
+          # ----------------------------------------------------------------
+          # Worker availability
+          # ----------------------------------------------------------------
+
+          - alert: SGLangWorkerDown
+            expr: absent(up{service="sglang-worker"} == 1)
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "SGLang worker is unreachable"
+              description: >
+                No healthy SGLang worker has been detected for 2 minutes.
+                Inference is unavailable. Check pod status:
+                  kubectl -n codex-inference get pods -l app.kubernetes.io/name=sglang-worker
+
+          - alert: DynamoFrontendDown
+            expr: absent(up{service="dynamo-frontend"} == 1)
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Dynamo frontend is unreachable"
+              description: >
+                No healthy Dynamo frontend has been detected for 1 minute.
+                The inference API is unavailable. Check pod status:
+                  kubectl -n codex-inference get pods -l app.kubernetes.io/name=dynamo-frontend
+
+          # ----------------------------------------------------------------
+          # Request backpressure
+          # ----------------------------------------------------------------
+
+          - alert: HighQueueDepth
+            expr: dynamo_frontend_queued_requests > 100
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High request backlog in Dynamo frontend"
+              description: >
+                {{ $value }} requests have been queued for more than 5 minutes.
+                Consider scaling SGLang workers:
+                  kubectl -n codex-inference scale statefulset sglang-worker --replicas=<N>
+
+          - alert: HighInflightRequests
+            expr: dynamo_frontend_inflight_requests > 200
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sustained high inflight request count"
+              description: >
+                {{ $value }} requests have been inflight for more than 10 minutes.
+                This may indicate slow generation or worker saturation.
+
+          # ----------------------------------------------------------------
+          # Worker restarts (watchdog / OOM)
+          # ----------------------------------------------------------------
+
+          # Primary expression requires kube-state-metrics.
+          # Fallback (no kube-state-metrics):
+          #   expr: changes(up{service="sglang-worker"}[10m]) > 1
+          - alert: SGLangWorkerRestarting
+            expr: >
+              increase(
+                kube_pod_container_status_restarts_total{
+                  container="sglang",
+                  namespace="codex-inference"
+                }[10m]
+              ) > 0
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: "SGLang worker restarted"
+              description: >
+                The SGLang container has restarted in the last 10 minutes.
+                Common causes: GPU deadlock (watchdog triggered), CUDA OOM,
+                or NCCL hang. Check logs:
+                  kubectl -n codex-inference logs -f statefulset/sglang-worker --previous

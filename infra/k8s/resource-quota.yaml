@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: codex-inference-quota
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  hard:
+    # Guardrails sized for the documented scaling ceiling — roughly 3 SGLang
+    # workers plus the Dynamo HPA max of 8 frontends — with headroom. requests
+    # is the binding cap; the 8-GPU limit below bounds the worker fleet anyway.
+    # Raise all dimensions for larger fleets.
+    requests.cpu: "32"
+    limits.cpu: "80"
+
+    requests.memory: 256Gi
+    limits.memory: 512Gi
+
+    # GPU: one per SGLang worker, so this caps the fleet at 8. Match your node pool.
+    requests.nvidia.com/gpu: "8"
+    limits.nvidia.com/gpu: "8"
+
+    # Storage: 10 PVCs is generous for the current stack (etcd, NATS, SGLang, Prometheus)
+    persistentvolumeclaims: "10"
+
+    # Pod count: prevents runaway replicaset expansion
+    pods: "50"

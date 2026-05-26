@@ -15,15 +15,24 @@
 services:
   prometheus:
     image: prom/prometheus:v2.51.0
+    security_opt:
+      - no-new-privileges:true
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - prometheus-data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     depends_on:
       sglang-worker:
         condition: service_healthy
