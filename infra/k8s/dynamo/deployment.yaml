@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamo-frontend
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: dynamo-frontend
+    app.kubernetes.io/part-of: codex-inference
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dynamo-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dynamo-frontend
+    spec:
+      serviceAccountName: dynamo-frontend
+      automountServiceAccountToken: false
+      containers:
+        - name: dynamo
+          image: nvcr.io/nvidia/ai-dynamo/sglang-runtime:1.0.1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          envFrom:
+            - configMapRef:
+                name: inference-config
+          env:
+            - name: SGLANG_WORKER_URL
+              value: "http://sglang-worker.codex-inference.svc.cluster.local:30000"
+          ports:
+            - name: http
+              containerPort: 8000
+          # startupProbe delays liveness/readiness until the process is up,
+          # giving up to 5 minutes (30 × 10 s) for slow cold starts.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi

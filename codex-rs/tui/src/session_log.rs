@@ -6,8 +6,8 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+use crate::app_command::AppCommand;
 use codex_core::config::Config;
-use codex_core::protocol::Op;
 use serde::Serialize;
 use serde_json::json;
 
@@ -125,14 +125,19 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 
     match event {
-        AppEvent::CodexEvent(ev) => {
-            write_record("to_tui", "codex_event", ev);
-        }
         AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
                 "kind": "new_session",
+            });
+            LOGGER.write_json_line(value);
+        }
+        AppEvent::ClearUi => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "clear_ui",
             });
             LOGGER.write_json_line(value);
         }
@@ -177,7 +182,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 }
 
-pub(crate) fn log_outbound_op(op: &Op) {
+pub(crate) fn log_outbound_op(op: &AppCommand) {
     if !LOGGER.is_enabled() {
         return;
     }

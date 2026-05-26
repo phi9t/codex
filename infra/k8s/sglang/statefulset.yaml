@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sglang-worker
+  namespace: codex-inference
+  labels:
+    app.kubernetes.io/name: sglang-worker
+    app.kubernetes.io/part-of: codex-inference
+    codex-inference/role: aggregated
+spec:
+  serviceName: sglang-worker-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sglang-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sglang-worker
+        codex-inference/role: aggregated
+    spec:
+      serviceAccountName: sglang-worker
+      automountServiceAccountToken: false
+      # Schedule on GPU nodes only
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: sglang
+          image: lmsysorg/sglang:v0.4.6
+          # SGLang/CUDA requires root and broad kernel access; we cannot apply
+          # runAsNonRoot or drop capabilities without risking GPU breakage.
+          # allowPrivilegeEscalation:false is safe and prevents setuid escalation.
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - python3
+            - -m
+            - sglang.launch_server
+          args:
+            - "--model-path"
+            - "$(MODEL_NAME)"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "$(SGLANG_PORT)"
+            - "--tp"
+            - "$(TENSOR_PARALLEL_SIZE)"
+            - "--mem-fraction-static"
+            - "$(SGLANG_MEM_FRACTION)"
+            - "--max-running-requests"
+            - "$(SGLANG_MAX_RUNNING_REQUESTS)"
+            - "--chunked-prefill-size"
+            - "$(SGLANG_CHUNKED_PREFILL_SIZE)"
+            - "--enable-priority-scheduling"
+            - "--radix-eviction-policy"
+            - "priority"
+            - "--enable-hierarchical-cache"
+            - "--hicache-write-policy"
+            - "write_through"
+            - "--tool-call-parser"
+            - "$(SGLANG_TOOL_CALL_PARSER)"
+            - "--watchdog-timeout"
+            - "$(SGLANG_WATCHDOG_TIMEOUT)"
+            - "--enable-metrics"
+          envFrom:
+            - configMapRef:
+                name: inference-config
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-credentials
+                  key: token
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 30000
+          # Model loading can take several minutes
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 120
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: "4"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+            limits:
+              # cpu/memory limits are required: the namespace ResourceQuota
+              # constrains limits.cpu/limits.memory, so every pod must set them.
+              # memory limit bounds request (32Gi) + the memory-backed /dev/shm
+              # emptyDir (32Gi, charged to this cgroup) so a full shm plus
+              # HiCache host-tier KV cannot OOM the container.
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: hf-cache
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi

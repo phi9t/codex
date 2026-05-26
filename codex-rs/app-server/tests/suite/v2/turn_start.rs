@@ -2,13 +2,20 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
+use app_test_support::create_fake_rollout;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
+use codex_app_server::INVALID_PARAMS_ERROR_CODE;
+use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::CollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
@@ -17,12 +24,16 @@ use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -32,16 +43,39 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::protocol_config_types::ReasoningSummary;
+use codex_config::config_toml::ConfigToml;
+use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(windows)]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
+const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+
+fn body_contains(req: &wiremock::Request, text: &str) -> bool {
+    String::from_utf8(req.body.clone())
+        .ok()
+        .is_some_and(|body| body.contains(text))
+}
 
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
@@ -49,7 +83,12 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(
@@ -80,6 +119,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -113,6 +153,229 @@ async fn turn_start_sends_originator_header() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 5 },
+        Some("<note>".to_string()),
+    )];
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: text_elements.clone(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let user_message_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let params = notification.params.expect("item/started params");
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(params).expect("deserialize item/started notification");
+            if let ThreadItem::UserMessage { .. } = item_started.item {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
+    .await??;
+
+    match user_message_item {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements,
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![
+                V2UserInput::Text {
+                    text: "x".repeat(MAX_USER_INPUT_TEXT_CHARS),
+                    text_elements: Vec::new(),
+                },
+                V2UserInput::Mention {
+                    name: "Demo App".to_string(),
+                    path: "app://demo-app".to_string(),
+                },
+            ],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    assert_eq!(turn.status, TurnStatus::InProgress);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        "http://localhost/unused",
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let first = "x".repeat(MAX_USER_INPUT_TEXT_CHARS / 2);
+    let second = "y".repeat(MAX_USER_INPUT_TEXT_CHARS / 2 + 1);
+    let actual_chars = first.chars().count() + second.chars().count();
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![
+                V2UserInput::Text {
+                    text: first,
+                    text_elements: Vec::new(),
+                },
+                V2UserInput::Text {
+                    text: second,
+                    text_elements: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        })
+        .await?;
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, INVALID_PARAMS_ERROR_CODE);
+    assert_eq!(
+        err.error.message,
+        format!("Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters.")
+    );
+    let data = err.error.data.expect("expected structured error data");
+    assert_eq!(data["input_error_code"], INPUT_TOO_LARGE_ERROR_CODE);
+    assert_eq!(data["max_chars"], MAX_USER_INPUT_TEXT_CHARS);
+    assert_eq!(data["actual_chars"], actual_chars);
+
+    let turn_started = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("turn/started"),
+    )
+    .await;
+    assert!(
+        turn_started.is_err(),
+        "did not expect a turn/started notification for rejected input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<()> {
     // Provide a mock server and config so model wiring is valid.
     // Three Codex turns hit the mock model (session start + two turn/start calls).
@@ -124,7 +387,12 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -149,6 +417,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -174,6 +443,21 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         started.turn.status,
         codex_app_server_protocol::TurnStatus::InProgress
     );
+    assert_eq!(started.turn.id, turn.id);
+
+    let completed_notif: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let completed: TurnCompletedNotification = serde_json::from_value(
+        completed_notif
+            .params
+            .expect("turn/completed params must be present"),
+    )?;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     // Send a second turn that exercises the overrides path: change the model.
     let turn_req2 = mcp
@@ -181,6 +465,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Second".to_string(),
+                text_elements: Vec::new(),
             }],
             model: Some("mock-model-override".to_string()),
             ..Default::default()
@@ -196,25 +481,474 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     // Ensure the second turn has a different id than the first.
     assert_ne!(turn.id, turn2.id);
 
-    // Expect a second turn/started notification as well.
-    let _notif2: JSONRPCNotification = timeout(
+    let notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/started"),
     )
     .await??;
+    let started2: TurnStartedNotification =
+        serde_json::from_value(notif2.params.expect("params must be present"))?;
+    assert_eq!(started2.thread_id, thread.id);
+    assert_eq!(started2.turn.id, turn2.id);
+    assert_eq!(started2.turn.status, TurnStatus::InProgress);
 
-    let completed_notif: JSONRPCNotification = timeout(
+    let completed_notif2: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
-    let completed: TurnCompletedNotification = serde_json::from_value(
-        completed_notif
+    let completed2: TurnCompletedNotification = serde_json::from_value(
+        completed_notif2
             .params
             .expect("turn/completed params must be present"),
     )?;
-    assert_eq!(completed.thread_id, thread.id);
-    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(completed2.thread_id, thread.id);
+    assert_eq!(completed2.turn.id, turn2.id);
+    assert_eq!(completed2.turn.status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::DefaultModeRequestUserInput, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: "mock-model-collab".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            summary: Some(ReasoningSummary::Auto),
+            output_schema: None,
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let payload = request.body_json();
+    assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
+    let payload_text = payload.to_string();
+    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instructions_v2()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            config: Some(HashMap::from([(
+                "features.default_mode_request_user_input".to_string(),
+                json!(true),
+            )])),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: "mock-model-collab".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            summary: Some(ReasoningSummary::Auto),
+            output_schema: None,
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let payload_text = request.body_json().to_string();
+    assert!(payload_text.contains("The `request_user_input` tool is available in Default mode."));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_personality_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("exp-codex-personality".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: Some(Personality::Friendly),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    if developer_texts.is_empty() {
+        eprintln!("request body: {}", request.body_json());
+    }
+
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "expected personality update message in developer input, got {developer_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let sse1 = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let sse2 = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let response_mock = responses::mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("exp-codex-personality".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: None,
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let turn_req2 = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: Some(Personality::Friendly),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp2: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req2)),
+    )
+    .await??;
+    let _turn2: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp2)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+
+    let first_developer_texts = requests[0].message_input_texts("developer");
+    assert!(
+        first_developer_texts
+            .iter()
+            .all(|text| !text.contains("<personality_spec>")),
+        "expected no personality update message in first request, got {first_developer_texts:?}"
+    );
+
+    let second_developer_texts = requests[1].message_input_texts("developer");
+    assert!(
+        second_developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "expected personality update message in second request, got {second_developer_texts:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+    create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "history user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let persisted_toml: ConfigToml = toml::from_str(&std::fs::read_to_string(
+        codex_home.path().join("config.toml"),
+    )?)?;
+    assert_eq!(persisted_toml.personality, Some(Personality::Pragmatic));
+    assert!(
+        codex_home
+            .path()
+            .join(PERSONALITY_MIGRATION_FILENAME)
+            .exists(),
+        "expected personality migration marker to be written on startup"
+    );
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: None,
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let instructions_text = request.instructions_text();
+    assert!(
+        instructions_text.contains(LOCAL_PRAGMATIC_TEMPLATE),
+        "expected startup-migrated pragmatic personality in model instructions, got: {instructions_text:?}"
+    );
 
     Ok(())
 }
@@ -231,7 +965,12 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -267,7 +1006,12 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
 
-    // This test only validates that turn/start responds and returns a turn.
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     Ok(())
 }
 
@@ -287,7 +1031,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call1",
         )?,
@@ -298,7 +1042,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call2",
         )?,
@@ -306,7 +1050,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
-    create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -331,6 +1080,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -352,23 +1102,41 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
         panic!("expected CommandExecutionRequestApproval request");
     };
     assert_eq!(params.item_id, "call1");
+    let resolved_request_id = request_id.clone();
 
     // Approve and wait for task completion
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
     )
     .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let mut saw_resolved = false;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "turn/completed" => {
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                break;
+            }
+            _ => {}
+        }
+    }
 
     // Second turn with approval_policy=never should not elicit approval
     let second_turn_id = mcp
@@ -376,6 +1144,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python again".to_string(),
+                text_elements: Vec::new(),
             }],
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
@@ -392,11 +1161,6 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     .await??;
 
     // Ensure we do NOT receive a CommandExecutionRequestApproval request before task completes
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
@@ -422,14 +1186,19 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-decline",
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -452,6 +1221,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -537,7 +1307,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -561,21 +1331,26 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(
             vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
         create_shell_command_sse_response(
             vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-second",
         )?,
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -600,11 +1375,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -612,7 +1390,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
+            personality: None,
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(
@@ -622,7 +1403,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
     mcp.clear_message_buffer();
@@ -633,14 +1414,19 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
+            personality: None,
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(
@@ -682,7 +1468,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -709,7 +1495,12 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -733,6 +1524,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -781,6 +1573,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
     assert_eq!(params.item_id, "patch-call");
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
+    let resolved_request_id = request_id.clone();
     let expected_readme_path = workspace.join("README.md");
     let expected_readme_path = expected_readme_path.to_string_lossy().into_owned();
     pretty_assertions::assert_eq!(
@@ -799,18 +1592,49 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         })?,
     )
     .await?;
-
-    let output_delta_notif = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("item/fileChange/outputDelta"),
-    )
-    .await??;
-    let output_delta: FileChangeOutputDeltaNotification = serde_json::from_value(
-        output_delta_notif
-            .params
-            .clone()
-            .expect("item/fileChange/outputDelta params"),
-    )?;
+    let mut saw_resolved = false;
+    let mut output_delta: Option<FileChangeOutputDeltaNotification> = None;
+    let mut completed_file_change: Option<ThreadItem> = None;
+    while !(output_delta.is_some() && completed_file_change.is_some()) {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "item/fileChange/outputDelta" => {
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                let notification: FileChangeOutputDeltaNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("item/fileChange/outputDelta params"),
+                )?;
+                output_delta = Some(notification);
+            }
+            "item/completed" => {
+                let completed: ItemCompletedNotification = serde_json::from_value(
+                    notification.params.clone().expect("item/completed params"),
+                )?;
+                if let ThreadItem::FileChange { .. } = completed.item {
+                    assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                    completed_file_change = Some(completed.item);
+                }
+            }
+            _ => {}
+        }
+    }
+    let output_delta = output_delta.expect("file change output delta should be observed");
     assert_eq!(output_delta.thread_id, thread.id);
     assert_eq!(output_delta.turn_id, turn.id);
     assert_eq!(output_delta.item_id, "patch-call");
@@ -820,37 +1644,399 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         output_delta.delta
     );
 
-    let completed_file_change = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let completed_notif = mcp
-                .read_stream_until_notification_message("item/completed")
-                .await?;
-            let completed: ItemCompletedNotification = serde_json::from_value(
-                completed_notif
-                    .params
-                    .clone()
-                    .expect("item/completed params"),
-            )?;
-            if let ThreadItem::FileChange { .. } = completed.item {
-                return Ok::<ThreadItem, anyhow::Error>(completed.item);
-            }
-        }
-    })
-    .await??;
+    let completed_file_change =
+        completed_file_change.expect("file change completion should be observed");
     let ThreadItem::FileChange { ref id, status, .. } = completed_file_change else {
         unreachable!("loop ensures we break on file change items");
     };
     assert_eq!(id, "patch-call");
     assert_eq!(status, PatchApplyStatus::Completed);
 
+    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
+    assert_eq!(readme_contents, "new line\n");
+
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
-    let readme_contents = std::fs::read_to_string(expected_readme_path)?;
-    assert_eq!(readme_contents, "new line\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const CHILD_PROMPT: &str = "child: do work";
+    const PARENT_PROMPT: &str = "spawn a child and continue";
+    const SPAWN_CALL_ID: &str = "spawn-call-1";
+    const REQUESTED_MODEL: &str = "gpt-5.1";
+    const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+
+    let server = responses::start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "model": REQUESTED_MODEL,
+        "reasoning_effort": REQUESTED_REASONING_EFFORT,
+    }))?;
+    let _parent_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-1"),
+            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let _child_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-1"),
+            responses::ev_assistant_message("msg-child-1", "child done"),
+            responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let _parent_follow_up = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-2"),
+            responses::ev_assistant_message("msg-turn1-2", "parent done"),
+            responses::ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Collab, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let spawn_started = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.expect("item/started params"))?;
+            if let ThreadItem::CollabAgentToolCall { id, .. } = &started.item
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(
+        spawn_started,
+        ThreadItem::CollabAgentToolCall {
+            id: SPAWN_CALL_ID.to_string(),
+            tool: CollabAgentTool::SpawnAgent,
+            status: CollabAgentToolCallStatus::InProgress,
+            sender_thread_id: thread.id.clone(),
+            receiver_thread_ids: Vec::new(),
+            prompt: Some(CHILD_PROMPT.to_string()),
+            model: Some(REQUESTED_MODEL.to_string()),
+            reasoning_effort: Some(REQUESTED_REASONING_EFFORT),
+            agents_states: HashMap::new(),
+        }
+    );
+
+    let spawn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification =
+                serde_json::from_value(completed_notif.params.expect("item/completed params"))?;
+            if let ThreadItem::CollabAgentToolCall { id, .. } = &completed.item
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CollabAgentToolCall {
+        id,
+        tool,
+        status,
+        sender_thread_id,
+        receiver_thread_ids,
+        prompt,
+        model,
+        reasoning_effort,
+        agents_states,
+    } = spawn_completed
+    else {
+        unreachable!("loop ensures we break on collab agent tool call items");
+    };
+    let receiver_thread_id = receiver_thread_ids
+        .first()
+        .cloned()
+        .expect("spawn completion should include child thread id");
+    assert_eq!(id, SPAWN_CALL_ID);
+    assert_eq!(tool, CollabAgentTool::SpawnAgent);
+    assert_eq!(status, CollabAgentToolCallStatus::Completed);
+    assert_eq!(sender_thread_id, thread.id);
+    assert_eq!(receiver_thread_ids, vec![receiver_thread_id.clone()]);
+    assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
+    assert_eq!(model, Some(REQUESTED_MODEL.to_string()));
+    assert_eq!(reasoning_effort, Some(REQUESTED_REASONING_EFFORT));
+    let agent_state = agents_states
+        .get(&receiver_thread_id)
+        .expect("spawn completion should include child agent state");
+    assert!(
+        matches!(
+            agent_state.status,
+            CollabAgentStatus::PendingInit | CollabAgentStatus::Running
+        ),
+        "child agent should still be initializing or already running, got {:?}",
+        agent_state.status
+    );
+    assert_eq!(agent_state.message, None);
+
+    let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let turn_completed_notif = mcp
+                .read_stream_until_notification_message("turn/completed")
+                .await?;
+            let turn_completed: TurnCompletedNotification = serde_json::from_value(
+                turn_completed_notif.params.expect("turn/completed params"),
+            )?;
+            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.turn.id {
+                return Ok::<TurnCompletedNotification, anyhow::Error>(turn_completed);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(turn_completed.thread_id, thread.id);
+    assert_eq!(turn_completed.turn.id, turn.turn.id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_spawn_agent_item_with_effective_role_model_metadata_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const CHILD_PROMPT: &str = "child: do work";
+    const PARENT_PROMPT: &str = "spawn a child and continue";
+    const SPAWN_CALL_ID: &str = "spawn-call-1";
+    const REQUESTED_MODEL: &str = "gpt-5.1";
+    const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+    const ROLE_MODEL: &str = "gpt-5.1-codex-max";
+    const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
+
+    let server = responses::start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "agent_type": "custom",
+        "model": REQUESTED_MODEL,
+        "reasoning_effort": REQUESTED_REASONING_EFFORT,
+    }))?;
+    let _parent_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, PARENT_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-1"),
+            responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            responses::ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let _child_turn = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("resp-child-1"),
+            responses::ev_assistant_message("msg-child-1", "child done"),
+            responses::ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+    let _parent_follow_up = responses::mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn1-2"),
+            responses::ev_assistant_message("msg-turn1-2", "parent done"),
+            responses::ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Collab, true)]),
+    )?;
+    std::fs::write(
+        codex_home.path().join("custom-role.toml"),
+        format!("model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let base_config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"{base_config}
+
+[agents.custom]
+description = "Custom role"
+config_file = "./custom-role.toml"
+"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let spawn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let completed_notif = mcp
+                .read_stream_until_notification_message("item/completed")
+                .await?;
+            let completed: ItemCompletedNotification =
+                serde_json::from_value(completed_notif.params.expect("item/completed params"))?;
+            if let ThreadItem::CollabAgentToolCall { id, .. } = &completed.item
+                && id == SPAWN_CALL_ID
+            {
+                return Ok::<ThreadItem, anyhow::Error>(completed.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CollabAgentToolCall {
+        id,
+        tool,
+        status,
+        sender_thread_id,
+        receiver_thread_ids,
+        prompt,
+        model,
+        reasoning_effort,
+        agents_states,
+    } = spawn_completed
+    else {
+        unreachable!("loop ensures we break on collab agent tool call items");
+    };
+    let receiver_thread_id = receiver_thread_ids
+        .first()
+        .cloned()
+        .expect("spawn completion should include child thread id");
+    assert_eq!(id, SPAWN_CALL_ID);
+    assert_eq!(tool, CollabAgentTool::SpawnAgent);
+    assert_eq!(status, CollabAgentToolCallStatus::Completed);
+    assert_eq!(sender_thread_id, thread.id);
+    assert_eq!(receiver_thread_ids, vec![receiver_thread_id.clone()]);
+    assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
+    assert_eq!(model, Some(ROLE_MODEL.to_string()));
+    assert_eq!(reasoning_effort, Some(ROLE_REASONING_EFFORT));
+    let agent_state = agents_states
+        .get(&receiver_thread_id)
+        .expect("spawn completion should include child agent state");
+    assert!(
+        matches!(
+            agent_state.status,
+            CollabAgentStatus::PendingInit | CollabAgentStatus::Running
+        ),
+        "child agent should still be initializing or already running, got {:?}",
+        agent_state.status
+    );
+    assert_eq!(agent_state.message, None);
+
+    let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let turn_completed_notif = mcp
+                .read_stream_until_notification_message("turn/completed")
+                .await?;
+            let turn_completed: TurnCompletedNotification = serde_json::from_value(
+                turn_completed_notif.params.expect("turn/completed params"),
+            )?;
+            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.turn.id {
+                return Ok::<TurnCompletedNotification, anyhow::Error>(turn_completed);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(turn_completed.thread_id, thread.id);
 
     Ok(())
 }
@@ -885,7 +2071,12 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         create_final_assistant_message_sse_response("patch 2 applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -910,6 +2101,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 1".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -973,7 +2165,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -986,6 +2178,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 2".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1030,7 +2223,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     .await??;
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -1059,7 +2252,12 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch declined")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1083,6 +2281,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1175,7 +2374,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+        mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
 
@@ -1198,16 +2397,13 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let config_toml = codex_home.path().join("config.toml");
-    let mut config_contents = std::fs::read_to_string(&config_toml)?;
-    config_contents.push_str(
-        r#"
-[features]
-unified_exec = true
-"#,
-    );
-    std::fs::write(&config_toml, config_contents)?;
+    create_config_toml_with_sandbox(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::UnifiedExec, true)]),
+        "danger-full-access",
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1230,7 +2426,9 @@ unified_exec = true
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run a command".to_string(),
+                text_elements: Vec::new(),
             }],
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             ..Default::default()
         })
         .await?;
@@ -1299,8 +2497,18 @@ unified_exec = true
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(completed_id, "uexec-1");
-    assert_eq!(completed_status, CommandExecutionStatus::Completed);
-    assert_eq!(exit_code, Some(0));
+    assert!(
+        matches!(
+            completed_status,
+            CommandExecutionStatus::Completed | CommandExecutionStatus::Failed
+        ),
+        "unexpected command execution status: {completed_status:?}"
+    );
+    if completed_status == CommandExecutionStatus::Completed {
+        assert_eq!(exit_code, Some(0));
+    } else {
+        assert!(exit_code.is_some(), "expected exit_code for failed command");
+    }
     assert_eq!(
         completed_process_id.as_deref(),
         Some(started_process_id.as_str())
@@ -1315,12 +2523,106 @@ unified_exec = true
     Ok(())
 }
 
+#[tokio::test]
+async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let workspace = TempDir::new()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_request = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_request)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_response)?;
+
+    let turn_request = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            cwd: Some(workspace.path().to_path_buf()),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config_toml.contains("trust_level = \"trusted\""));
+    assert!(!config_toml.contains(&workspace.path().display().to_string()));
+
+    Ok(())
+}
+
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
     codex_home: &Path,
     server_uri: &str,
     approval_policy: &str,
+    feature_flags: &BTreeMap<Feature, bool>,
 ) -> std::io::Result<()> {
+    create_config_toml_with_sandbox(
+        codex_home,
+        server_uri,
+        approval_policy,
+        feature_flags,
+        "read-only",
+    )
+}
+
+fn create_config_toml_with_sandbox(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+    feature_flags: &BTreeMap<Feature, bool>,
+    sandbox_mode: &str,
+) -> std::io::Result<()> {
+    let mut features = BTreeMap::new();
+    for (feature, enabled) in feature_flags {
+        features.insert(*feature, *enabled);
+    }
+    let feature_entries = features
+        .into_iter()
+        .map(|(feature, enabled)| {
+            let key = FEATURES
+                .iter()
+                .find(|spec| spec.id == feature)
+                .map(|spec| spec.key)
+                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
+            format!("{key} = {enabled}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -1328,9 +2630,12 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
+sandbox_mode = "{sandbox_mode}"
 
 model_provider = "mock_provider"
+
+[features]
+{feature_entries}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

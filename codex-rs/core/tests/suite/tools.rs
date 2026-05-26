@@ -7,10 +7,10 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_features::Feature;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -230,7 +230,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     fixture
         .submit_turn_with_policy(
             "run a command that should be denied by the read-only sandbox",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 
@@ -293,9 +293,15 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
 
     let mut builder = test_codex().with_config(move |config| {
         if use_unified_exec {
-            config.features.enable(Feature::UnifiedExec);
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         } else {
-            config.features.disable(Feature::UnifiedExec);
+            config
+                .features
+                .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         }
     });
     let test = builder.build(&server).await?;
@@ -315,7 +321,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
 async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let tools_disabled = collect_tools(false).await?;
+    let tools_disabled = collect_tools(/*use_unified_exec*/ false).await?;
     assert!(
         !tools_disabled.iter().any(|name| name == "exec_command"),
         "tools list should not include exec_command when disabled: {tools_disabled:?}"
@@ -325,7 +331,7 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
         "tools list should not include write_stdin when disabled: {tools_disabled:?}"
     );
 
-    let tools_enabled = collect_tools(true).await?;
+    let tools_enabled = collect_tools(/*use_unified_exec*/ true).await?;
     assert!(
         tools_enabled.iter().any(|name| name == "exec_command"),
         "tools list should include exec_command when enabled: {tools_enabled:?}"
@@ -416,6 +422,7 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config
+            .permissions
             .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
@@ -511,7 +518,8 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.sandbox_policy
+        cfg.permissions
+            .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });

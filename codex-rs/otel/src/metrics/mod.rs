@@ -1,6 +1,9 @@
 mod client;
 mod config;
 mod error;
+pub(crate) mod names;
+pub(crate) mod runtime_metrics;
+pub(crate) mod tags;
 pub(crate) mod timer;
 pub(crate) mod validation;
 
@@ -9,7 +12,9 @@ pub use crate::metrics::config::MetricsConfig;
 pub use crate::metrics::config::MetricsExporter;
 pub use crate::metrics::error::MetricsError;
 pub use crate::metrics::error::Result;
+pub use names::*;
 use std::sync::OnceLock;
+pub use tags::SessionMetricTagValues;
 
 static GLOBAL_METRICS: OnceLock<MetricsClient> = OnceLock::new();
 
@@ -17,6 +22,6 @@ pub(crate) fn install_global(metrics: MetricsClient) {
     let _ = GLOBAL_METRICS.set(metrics);
 }
 
-pub(crate) fn global() -> Option<MetricsClient> {
+pub fn global() -> Option<MetricsClient> {
     GLOBAL_METRICS.get().cloned()
 }

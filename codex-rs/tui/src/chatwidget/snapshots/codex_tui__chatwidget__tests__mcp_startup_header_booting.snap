@@ -8,4 +8,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  100% context left · ? for shortcuts                                           "
+"  gpt-5.3-codex default · 100% left · /tmp/project                              "

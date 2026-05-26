@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -31,6 +32,7 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::layout::Rect;
+use ratatui::layout::Size;
 use ratatui::text::Line;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
@@ -39,18 +41,21 @@ pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
-use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use codex_config::types::NotificationMethod;
 
 mod event_stream;
 mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
+
+/// Target frame interval for UI redraw scheduling.
+pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -210,6 +215,8 @@ pub fn init() -> Result<Terminal> {
     }
     set_modes()?;
 
+    flush_terminal_input_buffer();
+
     set_panic_hook();
 
     let backend = CrosstermBackend::new(stdout());
@@ -247,6 +254,7 @@ pub struct Tui {
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
+    is_zellij: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
 }
@@ -262,6 +270,10 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
+        let is_zellij = matches!(
+            codex_terminal_detection::terminal_info().multiplexer,
+            Some(codex_terminal_detection::Multiplexer::Zellij {})
+        );
 
         Self {
             frame_requester,
@@ -275,7 +287,8 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
-            notification_backend: Some(detect_backend()),
+            notification_backend: Some(detect_backend(NotificationMethod::default())),
+            is_zellij,
             alt_screen_enabled: true,
         }
     }
@@ -283,6 +296,10 @@ impl Tui {
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub fn set_notification_method(&mut self, method: NotificationMethod) {
+        self.notification_backend = Some(detect_backend(method));
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -361,36 +378,16 @@ impl Tui {
         let message = message.as_ref().to_string();
         match backend.notify(&message) {
             Ok(()) => true,
-            Err(err) => match backend.kind() {
-                NotificationBackendKind::WindowsToast => {
-                    tracing::error!(
-                        error = %err,
-                        "Failed to send Windows toast notification; falling back to OSC 9"
-                    );
-                    self.notification_backend = Some(DesktopNotificationBackend::osc9());
-                    if let Some(backend) = self.notification_backend.as_mut() {
-                        if let Err(osc_err) = backend.notify(&message) {
-                            tracing::warn!(
-                                error = %osc_err,
-                                "Failed to emit OSC 9 notification after toast fallback; \
-                                 disabling future notifications"
-                            );
-                            self.notification_backend = None;
-                            return false;
-                        }
-                        return true;
-                    }
-                    false
-                }
-                NotificationBackendKind::Osc9 => {
-                    tracing::warn!(
-                        error = %err,
-                        "Failed to emit OSC 9 notification; disabling future notifications"
-                    );
-                    self.notification_backend = None;
-                    false
-                }
-            },
+            Err(err) => {
+                let method = backend.method();
+                tracing::warn!(
+                    error = %err,
+                    method = %method,
+                    "Failed to emit terminal notification; disabling future notifications"
+                );
+                self.notification_backend = None;
+                false
+            }
         }
     }
 
@@ -455,6 +452,86 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    pub fn clear_pending_history_lines(&mut self) {
+        self.pending_history_lines.clear();
+    }
+
+    /// Resize the inline viewport to `height` rows, scrolling content above it if
+    /// the viewport would extend past the bottom of the screen. Returns `true` when
+    /// the caller must invalidate the diff buffer (Zellij mode), because the scroll
+    /// was performed with raw newlines that ratatui cannot track.
+    fn update_inline_viewport(
+        terminal: &mut Terminal,
+        height: u16,
+        is_zellij: bool,
+    ) -> Result<bool> {
+        let size = terminal.size()?;
+        let mut needs_full_repaint = false;
+
+        let mut area = terminal.viewport_area;
+        area.height = height.min(size.height);
+        area.width = size.width;
+        if area.bottom() > size.height {
+            let scroll_by = area.bottom() - size.height;
+            if is_zellij {
+                Self::scroll_zellij_expanded_viewport(terminal, size, scroll_by)?;
+                needs_full_repaint = true;
+            } else {
+                terminal
+                    .backend_mut()
+                    .scroll_region_up(0..area.top(), scroll_by)?;
+            }
+            area.y = size.height - area.height;
+        }
+        if area != terminal.viewport_area {
+            // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
+            terminal.clear()?;
+            terminal.set_viewport_area(area);
+        }
+
+        Ok(needs_full_repaint)
+    }
+
+    /// Push content above the viewport upward by `scroll_by` rows using raw
+    /// newlines at the screen bottom. This is the Zellij-safe alternative to
+    /// `scroll_region_up`, which relies on DECSTBM sequences Zellij does not
+    /// support.
+    fn scroll_zellij_expanded_viewport(
+        terminal: &mut Terminal,
+        size: Size,
+        scroll_by: u16,
+    ) -> Result<()> {
+        crossterm::queue!(
+            terminal.backend_mut(),
+            crossterm::cursor::MoveTo(0, size.height.saturating_sub(1))
+        )?;
+        for _ in 0..scroll_by {
+            crossterm::queue!(terminal.backend_mut(), crossterm::style::Print("\n"))?;
+        }
+        Ok(())
+    }
+
+    /// Write any buffered history lines above the viewport and clear the buffer.
+    /// Returns `true` when Zellij mode was used, signaling that the caller must
+    /// invalidate the diff buffer for a full repaint.
+    fn flush_pending_history_lines(
+        terminal: &mut Terminal,
+        pending_history_lines: &mut Vec<Line<'static>>,
+        is_zellij: bool,
+    ) -> Result<bool> {
+        if pending_history_lines.is_empty() {
+            return Ok(false);
+        }
+
+        crate::insert_history::insert_history_lines_with_mode(
+            terminal,
+            pending_history_lines.clone(),
+            crate::insert_history::InsertHistoryMode::new(is_zellij),
+        )?;
+        pending_history_lines.clear();
+        Ok(is_zellij)
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
@@ -483,35 +560,22 @@ impl Tui {
                 terminal.clear()?;
             }
 
-            let size = terminal.size()?;
+            let mut needs_full_repaint =
+                Self::update_inline_viewport(terminal, height, self.is_zellij)?;
+            needs_full_repaint |= Self::flush_pending_history_lines(
+                terminal,
+                &mut self.pending_history_lines,
+                self.is_zellij,
+            )?;
 
-            let mut area = terminal.viewport_area;
-            area.height = height.min(size.height);
-            area.width = size.width;
-            // If the viewport has expanded, scroll everything else up to make room.
-            if area.bottom() > size.height {
-                terminal
-                    .backend_mut()
-                    .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
-                area.y = size.height - area.height;
-            }
-            if area != terminal.viewport_area {
-                // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
-                terminal.clear()?;
-                terminal.set_viewport_area(area);
-            }
-
-            if !self.pending_history_lines.is_empty() {
-                crate::insert_history::insert_history_lines(
-                    terminal,
-                    self.pending_history_lines.clone(),
-                )?;
-                self.pending_history_lines.clear();
+            if needs_full_repaint {
+                terminal.invalidate_viewport();
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
             {
+                let area = terminal.viewport_area;
                 let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
                     self.alt_saved_viewport
                         .map(|r| r.bottom().saturating_sub(1))

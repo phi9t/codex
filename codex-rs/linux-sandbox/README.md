@@ -7,51 +7,66 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-## Git safety mounts (Linux)
+On Linux, the bubblewrap pipeline prefers the first `bwrap` found on `PATH`
+outside the current working directory whenever it is available. If `bwrap` is
+present but too old to support
+`--argv0`, the helper keeps using system bubblewrap and switches to a
+no-`--argv0` compatibility path for the inner re-exec. If `bwrap` is missing,
+the helper falls back to the vendored bubblewrap path compiled into this
+binary.
+Codex also surfaces a startup warning when `bwrap` is missing so users know it
+is falling back to the vendored helper. Codex surfaces the same startup warning
+path when bubblewrap cannot create user namespaces.
 
-When the sandbox policy allows workspace writes, the Linux sandbox uses a user
-namespace plus a mount namespace to bind-mount sensitive subpaths read-only
-before applying Landlock rules. This keeps Git and Codex metadata immutable
-while still allowing writes to other workspace files, including worktree setups
-where `.git` is a pointer file.
+**Current Behavior**
+- Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
+- Bubblewrap is the default filesystem sandbox pipeline.
+- If `bwrap` is present on `PATH` outside the current working directory, the
+  helper uses it.
+- If `bwrap` is present but too old to support `--argv0`, the helper uses a
+  no-`--argv0` compatibility path for the inner re-exec.
+- If `bwrap` is missing, the helper falls back to the vendored bubblewrap
+  path.
+- If `bwrap` is missing, Codex also surfaces a startup warning instead of
+  printing directly from the sandbox helper.
+- If bubblewrap cannot create user namespaces, Codex surfaces a startup warning
+  instead of waiting for a runtime sandbox failure.
+- Legacy Landlock + mount protections remain available as an explicit legacy
+  fallback path.
+- Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)
+  to force the legacy Landlock fallback.
+- The legacy Landlock fallback is used only when the split filesystem policy is
+  sandbox-equivalent to the legacy model after `cwd` resolution.
+- Split-only filesystem policies that do not round-trip through the legacy
+  `SandboxPolicy` model stay on bubblewrap so nested read-only or denied
+  carveouts are preserved.
+- When the default bubblewrap pipeline is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
+  seccomp network filter in-process.
+- When the default bubblewrap pipeline is active, the filesystem is read-only by default via `--ro-bind / /`.
+- When the default bubblewrap pipeline is active, writable roots are layered with `--bind <root> <root>`.
+- When the default bubblewrap pipeline is active, protected subpaths under writable roots (for
+  example `.git`,
+  resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
+- When the default bubblewrap pipeline is active, overlapping split-policy
+  entries are applied in path-specificity order so narrower writable children
+  can reopen broader read-only or denied parents while narrower denied subpaths
+  still win. For example, `/repo = write`, `/repo/a = none`, `/repo/a/b = write`
+  keeps `/repo` writable, denies `/repo/a`, and reopens `/repo/a/b` as
+  writable again.
+- When the default bubblewrap pipeline is active, symlink-in-path and non-existent protected paths inside
+  writable roots are blocked by mounting `/dev/null` on the symlink or first
+  missing component.
+- When the default bubblewrap pipeline is active, the helper explicitly isolates the user namespace via
+  `--unshare-user` and the PID namespace via `--unshare-pid`.
+- When the default bubblewrap pipeline is active and network is restricted without proxy routing, the helper also
+  isolates the network namespace via `--unshare-net`.
+- In managed proxy mode, the helper uses `--unshare-net` plus an internal
+  TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
+  endpoints.
+- In managed proxy mode, after the bridge is live, seccomp blocks new
+  AF_UNIX/socketpair creation for the user command.
+- When the default bubblewrap pipeline is active, it mounts a fresh `/proc` via `--proc /proc` by default, but
+  you can skip this in restrictive container environments with `--no-proc`.
 
-Protected subpaths under each writable root include:
-
-- `.git` (directory or pointer file)
-- the resolved `gitdir:` target when `.git` is a pointer file
-- `.codex` when present
-
-### How this plays with Landlock
-
-Mount permissions and Landlock intersect: if a bind mount is read-only, writes
-are denied even if Landlock would allow them. For that reason, the sandbox sets
-up the read-only mounts *before* calling `landlock_restrict_self()` and then
-applies Landlock rules on top.
-
-### Quick manual test
-
-Run the sandbox directly with a workspace-write policy (from a Git repository
-root):
-
-```bash
-codex-linux-sandbox \
-  --sandbox-policy-cwd "$PWD" \
-  --sandbox-policy '{"type":"workspace-write"}' \
-  -- bash -lc '
-set -euo pipefail
-
-echo "should fail" > .git/config && exit 1 || true
-echo "should fail" > .git/hooks/pre-commit && exit 1 || true
-echo "should fail" > .git/index.lock && exit 1 || true
-echo "should fail" > .codex/config.toml && exit 1 || true
-echo "ok" > sandbox-write-test.txt
-'
-```
-
-Expected behavior:
-
-- Writes to `.git/config` fail with `Read-only file system`.
-- Creating or modifying files under `.git/hooks/` fails.
-- Writing `.git/index.lock` fails (since `.git` is read-only).
-- Writes under `.codex/` fail when the directory exists.
-- Writing a normal repo file succeeds.
+**Notes**
+- The CLI surface still uses legacy names like `codex debug landlock`.

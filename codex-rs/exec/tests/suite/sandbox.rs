@@ -1,6 +1,6 @@
 #![cfg(unix)]
-use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::StdioPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
@@ -27,6 +27,7 @@ async fn spawn_command_under_sandbox(
         sandbox_policy,
         sandbox_cwd,
         stdio_policy,
+        /*network*/ None,
         env,
     )
     .await
@@ -41,8 +42,8 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_core::landlock::spawn_command_under_linux_sandbox;
-    let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
+    use codex_core::spawn_command_under_linux_sandbox;
+    let codex_linux_sandbox_exe = core_test_support::find_codex_linux_sandbox_exe()
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
@@ -50,15 +51,78 @@ async fn spawn_command_under_sandbox(
         command_cwd,
         sandbox_policy,
         sandbox_cwd,
+        /*use_legacy_landlock*/ false,
         stdio_policy,
+        /*network*/ None,
         env,
     )
     .await
 }
 
+#[cfg(target_os = "linux")]
+/// Determines whether Linux sandbox tests can run on this host.
+///
+/// These tests require an enforceable filesystem sandbox. We run a tiny command
+/// under the production Landlock path and skip when enforcement is unavailable
+/// (for example on kernels or container profiles where Landlock is not
+/// enforced).
+async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
+    let command_cwd = std::env::current_dir().ok()?;
+    let sandbox_cwd = command_cwd.clone();
+    let policy = SandboxPolicy::new_read_only_policy();
+
+    if can_apply_linux_sandbox_policy(&policy, &command_cwd, sandbox_cwd.as_path(), HashMap::new())
+        .await
+    {
+        return Some(HashMap::new());
+    }
+
+    eprintln!("Skipping test: Landlock is not enforceable on this host.");
+    None
+}
+
+#[cfg(target_os = "linux")]
+/// Returns whether a minimal command can run successfully with the requested
+/// Linux sandbox policy applied.
+///
+/// This is used as a capability probe so sandbox behavior tests only run when
+/// Landlock enforcement is actually active.
+async fn can_apply_linux_sandbox_policy(
+    policy: &SandboxPolicy,
+    command_cwd: &Path,
+    sandbox_cwd: &Path,
+    env: HashMap<String, String>,
+) -> bool {
+    let spawn_result = spawn_command_under_sandbox(
+        vec!["/usr/bin/true".to_string()],
+        command_cwd.to_path_buf(),
+        policy,
+        sandbox_cwd,
+        StdioPolicy::RedirectForShellTool,
+        env,
+    )
+    .await;
+    let Ok(mut child) = spawn_result else {
+        return false;
+    };
+    child
+        .wait()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 #[tokio::test]
 async fn python_multiprocessing_lock_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        // Skip on Linux hosts where Landlock cannot actually be enforced.
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
     #[cfg(target_os = "macos")]
     let writable_roots = Vec::<AbsolutePathBuf>::new();
 
@@ -71,6 +135,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -102,7 +167,7 @@ if __name__ == '__main__':
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should be able to spawn python under sandbox");
@@ -114,6 +179,13 @@ if __name__ == '__main__':
 #[tokio::test]
 async fn python_getpwuid_works_under_sandbox() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
 
     if std::process::Command::new("python3")
         .arg("--version")
@@ -124,7 +196,7 @@ async fn python_getpwuid_works_under_sandbox() {
         return;
     }
 
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
     let command_cwd = std::env::current_dir().expect("should be able to get current dir");
     let sandbox_cwd = command_cwd.clone();
 
@@ -138,7 +210,7 @@ async fn python_getpwuid_works_under_sandbox() {
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should be able to spawn python under sandbox");
@@ -153,6 +225,13 @@ async fn python_getpwuid_works_under_sandbox() {
 #[tokio::test]
 async fn sandbox_distinguishes_command_and_policy_cwds() {
     core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
     let temp = tempfile::tempdir().expect("should be able to create temp dir");
     let sandbox_root = temp.path().join("sandbox");
     let command_root = temp.path().join("command");
@@ -170,6 +249,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     // is under a writable root.
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -186,7 +266,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         &policy,
         canonical_sandbox_root.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env.clone(),
     )
     .await
     .expect("should spawn command writing to forbidden path");
@@ -217,7 +297,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         &policy,
         canonical_sandbox_root.as_path(),
         StdioPolicy::Inherit,
-        HashMap::new(),
+        sandbox_env,
     )
     .await
     .expect("should spawn command writing to sandbox root");
@@ -231,6 +311,78 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         .await
         .expect("try_exists allowed failed");
     assert!(allowed_exists, "allowed path should exist");
+}
+
+#[tokio::test]
+async fn sandbox_blocks_first_time_dot_codex_creation() {
+    core_test_support::skip_if_sandbox!();
+    #[cfg(target_os = "linux")]
+    let sandbox_env = match linux_sandbox_test_env().await {
+        Some(env) => env,
+        None => return,
+    };
+    #[cfg(not(target_os = "linux"))]
+    let sandbox_env = HashMap::new();
+
+    let temp = tempfile::tempdir().expect("should be able to create temp dir");
+    let repo_root = temp.path().join("repo");
+    create_dir_all(&repo_root).await.expect("mkdir repo");
+    let dot_codex = repo_root.join(".codex");
+    let config_toml = dot_codex.join("config.toml");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "mkdir -p .codex && echo 'sandbox_mode = \"danger-full-access\"' > .codex/config.toml"
+                .to_string(),
+        ],
+        repo_root.clone(),
+        &policy,
+        repo_root.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        sandbox_env,
+    )
+    .await
+    .expect("should spawn command creating .codex");
+
+    let status = child.wait().await.expect("should wait for .codex command");
+    assert!(
+        !status.success(),
+        "sandbox unexpectedly allowed first-time .codex creation: {status:?}"
+    );
+    let dot_codex_metadata = tokio::fs::symlink_metadata(&dot_codex).await;
+    if let Ok(metadata) = dot_codex_metadata {
+        assert!(
+            !metadata.is_dir(),
+            "{} should not be creatable as a directory",
+            dot_codex.display()
+        );
+    } else if let Err(err) = &dot_codex_metadata {
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "unexpected metadata error for {}: {err}",
+            dot_codex.display()
+        );
+    }
+    let config_toml_exists = match tokio::fs::try_exists(&config_toml).await {
+        Ok(exists) => exists,
+        Err(err) if err.kind() == io::ErrorKind::NotADirectory => false,
+        Err(err) => panic!("try_exists {} failed: {err}", config_toml.display()),
+    };
+    assert!(
+        !config_toml_exists,
+        "{} should not have been created",
+        config_toml.display()
+    );
 }
 
 fn unix_sock_body() {
@@ -310,7 +462,7 @@ fn unix_sock_body() {
 async fn allow_unix_socketpair_recvfrom() {
     run_code_under_sandbox(
         "allow_unix_socketpair_recvfrom",
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         || async { unix_sock_body() },
     )
     .await

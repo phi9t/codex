@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 use std::io::BufRead;
 use std::io::BufReader;
 use std::process::ChildStdout;
@@ -113,7 +114,7 @@ fn handle_server_request(
     stdin: &Arc<Mutex<Option<std::process::ChildStdin>>>,
     output: &Output,
 ) -> anyhow::Result<()> {
-    let server_request = match ServerRequest::try_from(request.clone()) {
+    let server_request = match ServerRequest::try_from(request) {
         Ok(server_request) => server_request,
         Err(_) => return Ok(()),
     };
@@ -228,6 +229,11 @@ fn emit_filtered_item(item: ThreadItem, thread_id: &str, output: &Output) -> any
         ThreadItem::AgentMessage { text, .. } => {
             let label = output.format_label("assistant", LabelColor::Assistant);
             output.server_line(&format!("{thread_label} {label}: {text}"))?;
+        }
+        ThreadItem::Plan { text, .. } => {
+            let label = output.format_label("assistant", LabelColor::Assistant);
+            output.server_line(&format!("{thread_label} {label}: plan"))?;
+            write_multiline(output, &thread_label, &format!("{label}:"), &text)?;
         }
         ThreadItem::CommandExecution {
             command,
