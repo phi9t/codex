@@ -46,11 +46,20 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.repo_root).resolve()
+    node_ids = {node["id"] for node in NODES}
     warnings = [
         f"missing source file: {node['file']}"
         for node in NODES
         if "file" in node and not (root / node["file"]).exists()
     ]
+
+    for edge in EDGES:
+        if edge["from"] not in node_ids:
+            warnings.append(f"invalid edge source node id: {edge['from']}")
+        if edge["to"] not in node_ids:
+            warnings.append(f"invalid edge target node id: {edge['to']}")
+
+    warnings = sorted(set(warnings))
 
     manifest = {"nodes": NODES, "edges": EDGES, "warnings": warnings}
 

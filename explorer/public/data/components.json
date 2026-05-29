@@ -6,8 +6,166 @@
     "subsystems",
     "hacks"
   ],
-  "nodes": [],
-  "edges": [],
+  "nodes": [
+    {
+      "id": "app-event-mapping",
+      "label": "App event mapping",
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 30,
+      "symbol": "fn item_event_to_server_notification",
+      "section": "2",
+      "summary": "App event mapping",
+      "source_ref": {
+        "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+        "line": 30
+      }
+    },
+    {
+      "id": "app-server",
+      "label": "App server",
+      "file": "codex-rs/app-server/README.md",
+      "line": 76,
+      "symbol": "Core Primitives",
+      "section": "2",
+      "summary": "App server",
+      "source_ref": {
+        "file": "codex-rs/app-server/README.md",
+        "line": 76
+      }
+    },
+    {
+      "id": "approvals-and-sandbox",
+      "label": "Approvals and sandbox",
+      "section": "2",
+      "summary": "Approvals and sandbox"
+    },
+    {
+      "id": "core-session",
+      "label": "Core session",
+      "file": "codex-rs/core/src/session/mod.rs",
+      "line": 366,
+      "symbol": "struct Codex",
+      "section": "2",
+      "summary": "Core session",
+      "source_ref": {
+        "file": "codex-rs/core/src/session/mod.rs",
+        "line": 366
+      }
+    },
+    {
+      "id": "exec",
+      "label": "Exec",
+      "file": "codex-rs/exec/src/lib.rs",
+      "line": 770,
+      "symbol": "TurnStartParams",
+      "section": "2",
+      "summary": "Exec",
+      "source_ref": {
+        "file": "codex-rs/exec/src/lib.rs",
+        "line": 770
+      }
+    },
+    {
+      "id": "execution-mcp-patch",
+      "label": "Execution / MCP / patch",
+      "section": "2",
+      "summary": "Execution / MCP / patch"
+    },
+    {
+      "id": "model-stream",
+      "label": "Model stream",
+      "section": "2",
+      "summary": "Model stream"
+    },
+    {
+      "id": "protocol",
+      "label": "Protocol",
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 1262,
+      "symbol": "enum EventMsg",
+      "section": "2",
+      "summary": "Protocol",
+      "source_ref": {
+        "file": "codex-rs/protocol/src/protocol.rs",
+        "line": 1262
+      }
+    },
+    {
+      "id": "thread-history",
+      "label": "Thread history",
+      "section": "2",
+      "summary": "Thread history"
+    },
+    {
+      "id": "tool-dispatch",
+      "label": "Tool dispatch",
+      "section": "2",
+      "summary": "Tool dispatch"
+    },
+    {
+      "id": "tui",
+      "label": "TUI",
+      "file": "codex-rs/tui/src/app_command.rs",
+      "line": 39,
+      "symbol": "UserTurn",
+      "section": "2",
+      "summary": "TUI",
+      "source_ref": {
+        "file": "codex-rs/tui/src/app_command.rs",
+        "line": 39
+      }
+    },
+    {
+      "id": "user-surface",
+      "label": "User surface",
+      "section": "2",
+      "summary": "User surface"
+    }
+  ],
+  "edges": [
+    {
+      "from": "user-surface",
+      "to": "core-session",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "core-session",
+      "to": "model-stream",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "model-stream",
+      "to": "tool-dispatch",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "tool-dispatch",
+      "to": "approvals-and-sandbox",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "approvals-and-sandbox",
+      "to": "execution-mcp-patch",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "execution-mcp-patch",
+      "to": "thread-history",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "thread-history",
+      "to": "user-surface",
+      "kind": "flow",
+      "label": "lifecycle"
+    }
+  ],
   "sections": [
     {
       "section": "1",
@@ -17,17 +175,31 @@
     {
       "section": "2",
       "title": "30-second architecture",
-      "related_hacks": []
+      "related_hacks": [],
+      "first_source_ref": {
+        "file": "codex-rs/tui/src/app_command.rs",
+        "line": 39
+      }
     },
     {
       "section": "3",
       "title": "Turn lifecycle overview",
-      "related_hacks": []
+      "related_hacks": [
+        "001",
+        "010"
+      ]
     },
     {
       "section": "14",
       "title": "Sub-agents and collaboration",
-      "related_hacks": []
+      "related_hacks": [
+        "100",
+        "107"
+      ],
+      "first_source_ref": {
+        "file": "codex-rs/core/src/agent/control.rs",
+        "line": 136
+      }
     },
     {
       "section": "18",
@@ -52,7 +224,7 @@
       "script": "hacks/010_capstone_stub_turn.py",
       "title": "capstone stub turn",
       "band": "000-099",
-      "kind": "fixture",
+      "kind": "simulated",
       "gated": false,
       "command": "python3 hacks/010_capstone_stub_turn.py",
       "desc": "",
@@ -74,7 +246,7 @@
       "script": "hacks/107_capstone_stub_subagents.py",
       "title": "capstone stub subagents",
       "band": "100-199",
-      "kind": "fixture",
+      "kind": "simulated",
       "gated": false,
       "command": "python3 hacks/107_capstone_stub_subagents.py",
       "desc": "",
