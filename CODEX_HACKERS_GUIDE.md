@@ -13,6 +13,8 @@ Run probes with:
 python3 hacks/001_protocol_lifecycle.py
 ```
 
+Note: these probe commands are valid references for this plan and become runnable once the probe harness and probe scripts are added in later tasks.
+
 Probe IDs use three digits so the catalog can grow into hundreds of focused exercises.
 
 ## 2. 30-second architecture
@@ -20,11 +22,11 @@ Probe IDs use three digits so the catalog can grow into hundreds of focused exer
 | Box | File | Symbol |
 | --- | --- | --- |
 | TUI | `codex-rs/tui/src/app_command.rs:39` | `UserTurn` |
-| Exec | `codex-rs/exec/src/lib.rs:50` | `TurnStartParams` |
+| Exec | `codex-rs/exec/src/lib.rs:770` | `TurnStartParams` |
 | App server | `codex-rs/app-server/README.md:76` | `Core Primitives` |
-| Core session | `codex-rs/core/src/session/mod.rs:360` | `struct Codex` |
+| Core session | `codex-rs/core/src/session/mod.rs:366` | `struct Codex` |
 | Protocol | `codex-rs/protocol/src/protocol.rs:1433` | `enum EventMsg` |
-| App event mapping | `codex-rs/app-server-protocol/src/protocol/event_mapping.rs:29` | `fn item_event_to_server_notification` |
+| App event mapping | `codex-rs/app-server-protocol/src/protocol/event_mapping.rs:30` | `fn item_event_to_server_notification` |
 
 ```mermaid
 flowchart LR
@@ -48,11 +50,13 @@ Try it: `hacks/001_protocol_lifecycle.py`
 
 | Box | File | Symbol |
 | --- | --- | --- |
-| Agent control | `codex-rs/core/src/agent/control.rs:110` | `struct AgentControl` |
-| Agent registry | `codex-rs/core/src/agent/registry.rs:17` | `struct AgentRegistry` |
+| Agent control | `codex-rs/core/src/agent/control.rs:136` | `struct AgentControl` |
+| Agent registry | `codex-rs/core/src/agent/registry.rs:23` | `struct AgentRegistry` |
 | Mailbox | `codex-rs/core/src/agent/mailbox.rs:11` | `struct Mailbox` |
 | Sub-agent source | `codex-rs/protocol/src/protocol.rs:2564` | `enum SubAgentSource` |
 | Collab item mapping | `codex-rs/app-server-protocol/src/protocol/event_mapping.rs:75` | `CollabAgentSpawnBegin` |
+
+Note: probe scripts in this section are documented in advance and can be executed after the relevant harness tasks are implemented.
 
 Try it: `hacks/100_agent_registry_limits.py`
 

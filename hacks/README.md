@@ -2,6 +2,8 @@
 
 Runnable probes for `CODEX_HACKERS_GUIDE.md`.
 
+These commands are documentation references for this plan; they become runnable once the probe harness and probe scripts are implemented in later tasks.
+
 Run one probe:
 
 ```bash
