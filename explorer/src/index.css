@@ -35,6 +35,27 @@ body {
   overflow-x: hidden;
 }
 
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  transform: translateY(-200%);
+  background: var(--color-panel);
+  color: var(--color-text);
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-cyan);
+  text-decoration: none;
+  z-index: 100;
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-amber);
+}
+
 .observatory-bg {
   max-width: 1100px;
   margin: 0 auto;

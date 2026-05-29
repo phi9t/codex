@@ -81,51 +81,56 @@ function App() {
   const activeConfig = familyConfigs.find((family) => family.id === activeFamily) ?? familyConfigs[0];
 
   return (
-    <main className="observatory-bg">
-      <div className="explorer-container">
-        <header className="explorer-header">
-          <div>
-            <p className="eyebrow">Architecture Explorer</p>
-            <h1>Codex Observatory</h1>
-            <p>{shellInfo}</p>
-          </div>
-          <nav aria-label="Architecture families" className="family-switcher">
-            {familyConfigs.map((family) => {
-              const Icon = family.icon;
-              const active = family.id === activeFamily;
-              return (
-                <button
-                  key={family.id}
-                  type="button"
-                  className={`family-switch-btn${active ? " is-active" : ""}`}
-                  aria-pressed={active}
-                  onClick={() => setActiveFamily(family.id)}
-                >
-                  <Icon className="switch-icon" aria-hidden />
-                  <span>{family.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </header>
+    <>
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+      <main className="observatory-bg">
+        <div className="explorer-container">
+          <header className="explorer-header">
+            <div>
+              <p className="eyebrow">Architecture Explorer</p>
+              <h1>Codex Observatory</h1>
+              <p>{shellInfo}</p>
+            </div>
+            <nav aria-label="Architecture families" className="family-switcher">
+              {familyConfigs.map((family) => {
+                const Icon = family.icon;
+                const active = family.id === activeFamily;
+                return (
+                  <button
+                    key={family.id}
+                    type="button"
+                    className={`family-switch-btn${active ? " is-active" : ""}`}
+                    aria-pressed={active}
+                    onClick={() => setActiveFamily(family.id)}
+                  >
+                    <Icon className="switch-icon" aria-hidden />
+                    <span>{family.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          </header>
 
-        <section className="panel">
-          <div className="panel-title-row">
-            <h2>{activeConfig.label}</h2>
-            <p>{activeConfig.description}</p>
-          </div>
-          <ul className="panel-summary" aria-label={`${activeConfig.label} summary`}>
-            {activeConfig.summary.map((item) => (
-              <li key={item}>
-                <ChevronRight className="summary-icon" aria-hidden />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="panel-placeholder">{activeConfig.placeholder}</p>
-        </section>
-      </div>
-    </main>
+          <section id="main-content" className="panel">
+            <div className="panel-title-row">
+              <h2>{activeConfig.label}</h2>
+              <p>{activeConfig.description}</p>
+            </div>
+            <ul className="panel-summary" aria-label={`${activeConfig.label} summary`}>
+              {activeConfig.summary.map((item) => (
+                <li key={item}>
+                  <ChevronRight className="summary-icon" aria-hidden />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="panel-placeholder">{activeConfig.placeholder}</p>
+          </section>
+        </div>
+      </main>
+    </>
   );
 }
 
