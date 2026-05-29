@@ -98,17 +98,37 @@ function layoutLifecycleGraph(
   }
 
   const depthById = new Map<string, number>();
+  const depthBumpsById = new Map<string, number>();
   for (const id of queue) {
     depthById.set(id, 0);
   }
 
-  for (const id of queue) {
-    const sourceDepth = depthById.get(id) ?? 0;
-    const nextEdges = outgoing.get(id) ?? [];
+  const maxDepth = Math.max(1, nodes.length);
+  const pending: string[] = [...queue];
+
+  while (pending.length > 0) {
+    const currentId = pending.shift();
+    if (currentId === undefined) {
+      continue;
+    }
+
+    const sourceDepth = depthById.get(currentId) ?? 0;
+    const nextEdges = outgoing.get(currentId) ?? [];
     for (const edge of nextEdges) {
-      const current = depthById.get(edge.to) ?? 0;
-      if (sourceDepth + 1 > current) {
-        depthById.set(edge.to, sourceDepth + 1);
+      const nextDepth = sourceDepth + 1;
+      if (nextDepth > maxDepth) {
+        continue;
+      }
+
+      const currentDepth = depthById.get(edge.to) ?? 0;
+      if (nextDepth > currentDepth) {
+        depthById.set(edge.to, nextDepth);
+        const updateCount = (depthBumpsById.get(edge.to) ?? 0) + 1;
+        depthBumpsById.set(edge.to, updateCount);
+
+        if (updateCount <= maxDepth) {
+          pending.push(edge.to);
+        }
       }
     }
   }
@@ -122,7 +142,6 @@ function layoutLifecycleGraph(
   }
 
   const positioned: PositionedLifecycleNode[] = [];
-  const byNodeId = new Map<string, PositionedLifecycleNode>();
 
   for (const [depth, nodeIds] of layered) {
     for (let index = 0; index < nodeIds.length; index += 1) {
@@ -142,7 +161,6 @@ function layoutLifecycleGraph(
         index,
       };
       positioned.push(positionedNode);
-      byNodeId.set(node.id, positionedNode);
     }
   }
 

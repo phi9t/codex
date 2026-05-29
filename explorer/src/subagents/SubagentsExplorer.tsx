@@ -104,16 +104,36 @@ function layoutSubagentGraph(
     .map(([id]) => id);
 
   const depthById = new Map<string, number>();
+  const depthBumpsById = new Map<string, number>();
   for (const root of roots) {
     depthById.set(root, 0);
   }
-  for (const root of roots) {
-    const rootDepth = depthById.get(root) ?? 0;
-    const outgoingEdges = outgoing.get(root) ?? [];
+
+  const maxDepth = Math.max(1, nodes.length);
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const currentId = pending.shift();
+    if (currentId === undefined) {
+      continue;
+    }
+
+    const currentDepth = depthById.get(currentId) ?? 0;
+    const outgoingEdges = outgoing.get(currentId) ?? [];
     for (const outgoingEdge of outgoingEdges) {
-      const currentDepth = depthById.get(outgoingEdge.to) ?? 0;
-      if (rootDepth + 1 > currentDepth) {
-        depthById.set(outgoingEdge.to, rootDepth + 1);
+      const nextDepth = currentDepth + 1;
+      if (nextDepth > maxDepth) {
+        continue;
+      }
+
+      const existingDepth = depthById.get(outgoingEdge.to) ?? 0;
+      if (nextDepth > existingDepth) {
+        depthById.set(outgoingEdge.to, nextDepth);
+        const updateCount = (depthBumpsById.get(outgoingEdge.to) ?? 0) + 1;
+        depthBumpsById.set(outgoingEdge.to, updateCount);
+
+        if (updateCount <= maxDepth) {
+          pending.push(outgoingEdge.to);
+        }
       }
     }
   }
@@ -127,7 +147,6 @@ function layoutSubagentGraph(
   }
 
   const positioned: PositionedSubagentNode[] = [];
-  const byNodeId = new Map<string, PositionedSubagentNode>();
   for (const [depth, nodeIds] of byDepth) {
     for (let index = 0; index < nodeIds.length; index += 1) {
       const id = nodeIds[index];
@@ -146,7 +165,6 @@ function layoutSubagentGraph(
         index,
       };
       positioned.push(positionedNode);
-      byNodeId.set(node.id, positionedNode);
     }
   }
 
