@@ -1,6 +1,10 @@
-import { ChevronRight, Cpu, Orbit, Puzzle, Wrench } from "lucide-react";
-import { useState } from "react";
-import type { ComponentType } from "react";
+import { Cpu, Orbit, Puzzle, Wrench } from "lucide-react";
+import { type ComponentType, type ReactElement, useState } from "react";
+
+import { HacksExplorer } from "./hacks/HacksExplorer";
+import { SubagentsExplorer } from "./subagents/SubagentsExplorer";
+import { SubsystemExplorer } from "./subsystems/SubsystemExplorer";
+import { TurnLifecycleExplorer } from "./lifecycle/TurnLifecycleExplorer";
 
 type Family = "lifecycle" | "subagents" | "subsystems" | "hacks";
 
@@ -9,8 +13,6 @@ type FamilyConfig = {
   icon: ComponentType<{ className?: string }>;
   label: string;
   description: string;
-  summary: string[];
-  placeholder: string;
 };
 
 const familyConfigs: FamilyConfig[] = [
@@ -20,27 +22,13 @@ const familyConfigs: FamilyConfig[] = [
     label: "Lifecycle",
     description:
       "Track architecture states across request initialization, execution, and shutdown.",
-    summary: [
-      "Turn lifecycle graph overview",
-      "State transition timeline",
-      "Key lifecycle event stream",
-    ],
-    placeholder:
-      "Lifecycle views will show current run phases, state ownership, and phase transitions.",
   },
   {
     id: "subagents",
     icon: Cpu,
     label: "Subagents",
     description:
-      "Inspect active subagent families and their assigned tasks without going into full detail.",
-    summary: [
-      "Subagent registry and health",
-      "Dependency and parent links",
-      "Recent activity summary",
-    ],
-    placeholder:
-      "Subagent cards and filters are intentionally minimal here while full details are handled in the next task.",
+      "Inspect active sub-agent families and their assigned tasks without going into full detail.",
   },
   {
     id: "subsystems",
@@ -48,13 +36,6 @@ const familyConfigs: FamilyConfig[] = [
     label: "Subsystems",
     description:
       "Surface subsystem slices and map how responsibilities are separated at runtime.",
-    summary: [
-      "Subsystem list and status",
-      "Topology and ownership pointers",
-      "Telemetry stubs for load and error count",
-    ],
-    placeholder:
-      "Subsystem data is represented with compact placeholders to keep the shell stable for Task 7 implementation.",
   },
   {
     id: "hacks",
@@ -62,23 +43,23 @@ const familyConfigs: FamilyConfig[] = [
     label: "Hacks",
     description:
       "Display hack patterns and temporary workarounds with context and lifecycle impact.",
-    summary: [
-      "Hack catalog and impact tags",
-      "Scope and deprecation timing",
-      "Migration notes and owners",
-    ],
-    placeholder:
-      "Hacks are currently summarized as grouped placeholders pending detailed view components.",
   },
 ];
 
 const shellInfo =
-  "The Observatory shell is intentionally compact: switch a family to reveal summary placeholders while Task 7 adds full detail views.";
+  "The shell stays constant while each family renders its live architecture data from manifest JSON.";
 
 function App() {
   const [activeFamily, setActiveFamily] = useState<Family>("lifecycle");
 
   const activeConfig = familyConfigs.find((family) => family.id === activeFamily) ?? familyConfigs[0];
+
+  const familyComponents: Record<Family, ReactElement> = {
+    lifecycle: <TurnLifecycleExplorer />,
+    subagents: <SubagentsExplorer />,
+    subsystems: <SubsystemExplorer />,
+    hacks: <HacksExplorer />,
+  };
 
   return (
     <>
@@ -108,8 +89,8 @@ function App() {
                     <Icon className="switch-icon" aria-hidden />
                     <span>{family.label}</span>
                   </button>
-                );
-              })}
+                  );
+                })}
             </nav>
           </header>
 
@@ -118,15 +99,7 @@ function App() {
               <h2>{activeConfig.label}</h2>
               <p>{activeConfig.description}</p>
             </div>
-            <ul className="panel-summary" aria-label={`${activeConfig.label} summary`}>
-              {activeConfig.summary.map((item) => (
-                <li key={item}>
-                  <ChevronRight className="summary-icon" aria-hidden />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="panel-placeholder">{activeConfig.placeholder}</p>
+            {familyComponents[activeFamily]}
           </section>
         </div>
       </main>
