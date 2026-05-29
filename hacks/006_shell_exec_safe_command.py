@@ -13,18 +13,22 @@ def main() -> int:
         ("codex-rs/core/src/tools/runtimes/shell.rs", "Approvable<ShellRequest>"),
         ("codex-rs/core/src/tools/runtimes/shell.rs", "sandbox_mode_for_first_attempt"),
     ]
+    all_markers_present = True
 
     for path, marker in marker_pairs:
         text = canonicalization if "command_canonicalization" in path else runtime
-        print(
-            f"{path}:{marker}: "
-            f"{'present' if marker in text else 'missing'}"
-        )
+        present = marker in text
+        print(f"{path}:{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print(
         "exec path: command args -> canonicalization -> approval key -> sandbox attempt -> run"
     )
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

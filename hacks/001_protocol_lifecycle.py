@@ -7,11 +7,18 @@ def main() -> int:
     print_header("Core protocol lifecycle")
     protocol = read_text("codex-rs/protocol/src/protocol.rs")
     markers = ["enum EventMsg", "enum AgentStatus", "enum SessionSource"]
+    all_markers_present = True
     for marker in markers:
-        print(f"{marker}: {'present' if marker in protocol else 'missing'}")
+        present = marker in protocol
+        print(f"{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print("turn path: user_input -> model_stream -> tool_calls -> events -> persistence")
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

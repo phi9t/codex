@@ -12,16 +12,20 @@ def main() -> int:
         "ServerNotification::ItemCompleted",
         "ThreadItem::DynamicToolCall",
     ]
+    all_markers_present = True
     for marker in markers:
-        print(
-            f"{marker}: "
-            f"{'present' if marker in projection else 'missing'}"
-        )
+        present = marker in projection
+        print(f"{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print(
         "projection path: core EventMsg -> item_event_to_server_notification -> thread notification item"
     )
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

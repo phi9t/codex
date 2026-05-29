@@ -13,17 +13,21 @@ def main() -> int:
         ("codex-rs/core/src/tools/runtimes/apply_patch.rs", "ApplyPatchRuntime"),
         ("codex-rs/core/src/tools/runtimes/apply_patch.rs", "start_approval_async"),
     ]
+    all_markers_present = True
     for path, marker in markers:
         text = handler if "handlers/apply_patch.rs" in path else runtime
-        print(
-            f"{path}:{marker}: "
-            f"{'present' if marker in text else 'missing'}"
-        )
+        present = marker in text
+        print(f"{path}:{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print(
         "patch path: function call -> diff diff parser -> approval -> runtime apply -> event output"
     )
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

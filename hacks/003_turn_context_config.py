@@ -11,13 +11,20 @@ def main() -> int:
         "approval_policy",
         "SessionSource",
     ]
+    all_markers_present = True
     for marker in markers:
-        print(f"{marker}: {'present' if marker in turn_context else 'missing'}")
+        present = marker in turn_context
+        print(f"{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print(
         "turn context path: user input -> turn policy + environments -> model capabilities -> runtime config"
     )
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

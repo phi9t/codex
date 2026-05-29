@@ -13,13 +13,20 @@ def main() -> int:
         ("codex-rs/core/src/tools/router.rs", "build_tool_call"),
         ("codex-rs/core/src/tools/orchestrator.rs", "ToolOrchestrator"),
     ]
+    all_markers_present = True
     for path, marker in markers:
         text = core_turn if "session/turn.rs" in path else orchestrator if "orchestrator.rs" in path else router
-        print(f"{path}:{marker}: {'present' if marker in text else 'missing'}")
+        present = marker in text
+        print(f"{path}:{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
 
     print("capstone path: user_input -> run_turn -> model emits tool_call -> approval -> orchestrator -> model final response")
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":

@@ -12,13 +12,20 @@ def main() -> int:
         "TurnReferenceContextItem",
         "finalize_active_segment",
     ]
+    all_markers_present = True
     for marker in markers:
-        print(f"{marker}: {'present' if marker in rollout else 'missing'}")
+        present = marker in rollout
+        print(f"{marker}: {'present' if present else 'missing'}")
+        all_markers_present &= present
     print(
         "rollout path: persisted rollout items -> active replay segments -> rollback resolution -> restored history"
     )
-    print("result: ok")
-    return 0
+    if all_markers_present:
+        print("result: ok")
+        return 0
+
+    print("result: missing markers")
+    return 1
 
 
 if __name__ == "__main__":
