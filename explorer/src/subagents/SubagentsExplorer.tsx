@@ -31,12 +31,30 @@ type PositionedSubagentNode = SubagentNode & {
   y: number;
   depth: number;
   index: number;
+  lane: GraphLane;
 };
 
-const textWidth = (text: string) => Math.max(160, text.length * 8 + 32);
-const nodeHeight = 68;
-const rowSpacing = 120;
-const columnSpacing = 340;
+type GraphLane = {
+  id: string;
+  label: string;
+};
+
+const subagentLanes: GraphLane[] = [
+  { id: "control", label: "Control" },
+  { id: "thread", label: "Thread" },
+  { id: "message", label: "Mailbox" },
+  { id: "protocol", label: "Protocol" },
+];
+
+const nodeHeight = 58;
+const nodeWidth = 192;
+const rowSpacing = 104;
+const columnSpacing = 232;
+const laneHeaderHeight = 46;
+
+function laneForSubagentNode(node: SubagentNode): GraphLane {
+  return subagentLanes.find((lane) => lane.id === node.group) ?? subagentLanes[0];
+}
 
 function groupColors(group: string): string {
   if (group === "control") {
@@ -59,7 +77,7 @@ function edgeColor(kind: string): string {
     return "#45d0ff";
   }
   if (kind === "state") {
-    return "var(--color-amber)";
+    return "var(--execution)";
   }
   if (kind === "spawn") {
     return "#9cff87";
@@ -70,7 +88,7 @@ function edgeColor(kind: string): string {
   if (kind === "event") {
     return "#cfaaff";
   }
-  return "var(--color-muted)";
+  return "var(--text-muted)";
 }
 
 function layoutSubagentGraph(
@@ -138,31 +156,36 @@ function layoutSubagentGraph(
     }
   }
 
-  const byDepth = new Map<number, string[]>();
+  const byLane = new Map<string, string[]>();
   for (const node of nodes) {
-    const depth = depthById.get(node.id) ?? 0;
-    const layer = byDepth.get(depth) ?? [];
+    const lane = laneForSubagentNode(node);
+    const layer = byLane.get(lane.id) ?? [];
     layer.push(node.id);
-    byDepth.set(depth, layer);
+    byLane.set(lane.id, layer);
   }
 
   const positioned: PositionedSubagentNode[] = [];
-  for (const [depth, nodeIds] of byDepth) {
+  for (const lane of subagentLanes) {
+    const nodeIds = byLane.get(lane.id) ?? [];
+    nodeIds.sort(
+      (left, right) => (depthById.get(left) ?? 0) - (depthById.get(right) ?? 0),
+    );
     for (let index = 0; index < nodeIds.length; index += 1) {
       const id = nodeIds[index];
       const node = byId.get(id);
       if (node === undefined) {
         continue;
       }
-      const width = textWidth(node.label);
+      const laneIndex = subagentLanes.findIndex((candidate) => candidate.id === lane.id);
       const positionedNode: PositionedSubagentNode = {
         ...node,
-        width,
+        width: nodeWidth,
         height: nodeHeight,
-        x: 24 + depth * columnSpacing,
-        y: 20 + index * rowSpacing,
-        depth,
+        x: 24 + laneIndex * columnSpacing,
+        y: laneHeaderHeight + 22 + index * rowSpacing,
+        depth: depthById.get(node.id) ?? 0,
         index,
+        lane,
       };
       positioned.push(positionedNode);
     }
@@ -170,7 +193,7 @@ function layoutSubagentGraph(
 
   return {
     nodes: positioned,
-    width: Math.max(700, positioned.reduce((max, node) => Math.max(max, node.x + node.width), 0) + 80),
+    width: Math.max(700, positioned.reduce((max, node) => Math.max(max, node.x + node.width), 0) + 32),
     height: Math.max(240, positioned.reduce((max, node) => Math.max(max, node.y + node.height), 0) + 80),
   };
 }
@@ -205,15 +228,19 @@ function renderEdge(
       <text x={centerX} y={centerY - 5} className="graph-edge-label" textAnchor="middle">
         {edge.label}
       </text>
-      <text x={centerX} y={centerY + 12} className="graph-edge-kind" textAnchor="middle">
-        {edge.kind}
-      </text>
     </g>
   );
 }
 
 function formatGroupOrder(groups: string[]): string[] {
   return [...groups].sort((left, right) => left.localeCompare(right));
+}
+
+function basename(path: string | undefined): string {
+  if (path === undefined) {
+    return "file unknown";
+  }
+  return path.split("/").at(-1) ?? path;
 }
 
 export function SubagentsExplorer(): React.ReactElement {
@@ -277,6 +304,23 @@ export function SubagentsExplorer(): React.ReactElement {
                       <path d="M0,0 L0,6 L8,3 z" fill="#6bc5ff" />
                     </marker>
                   </defs>
+                  <g className="graph-swimlanes">
+                    {subagentLanes.map((lane, index) => (
+                      <g key={lane.id} className="graph-lane">
+                        <rect
+                          x={12 + index * columnSpacing}
+                          y={10}
+                          width={columnSpacing - 24}
+                          height={graph.height - 24}
+                          rx={8}
+                          ry={8}
+                        />
+                        <text x={24 + index * columnSpacing} y={34} className="graph-lane__label">
+                          {lane.label}
+                        </text>
+                      </g>
+                    ))}
+                  </g>
                   <g>
                     {manifest.edges.flatMap((edge, edgeIndex) => {
                       const source = nodeById.get(edge.from);
@@ -313,11 +357,11 @@ export function SubagentsExplorer(): React.ReactElement {
                         className="graph-node__box"
                         style={{ stroke: groupColors(node.group) }}
                       />
-                      <text x={node.x + 12} y={node.y + 26} className="graph-node__label">
+                      <text x={node.x + 12} y={node.y + 23} className="graph-node__label">
                         {node.label}
                       </text>
-                      <text x={node.x + 12} y={node.y + 46} className="graph-node__meta">
-                        {node.group} · {node.file ?? "file unknown"}
+                      <text x={node.x + 12} y={node.y + 42} className="graph-node__meta">
+                        {node.group} · {basename(node.file)}
                       </text>
                       <title>{node.label}</title>
                     </g>

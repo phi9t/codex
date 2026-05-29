@@ -21,33 +21,33 @@ const familyConfigs: FamilyConfig[] = [
     icon: Orbit,
     label: "Lifecycle",
     description:
-      "Track architecture states across request initialization, execution, and shutdown.",
+      "Follow a user turn across surfaces, core session flow, tools, execution, and persisted events.",
   },
   {
     id: "subagents",
     icon: Cpu,
     label: "Subagents",
     description:
-      "Inspect active sub-agent families and their assigned tasks without going into full detail.",
+      "Map the collaboration control plane from spawn decisions through mailbox and protocol events.",
   },
   {
     id: "subsystems",
     icon: Puzzle,
     label: "Subsystems",
     description:
-      "Surface subsystem slices and map how responsibilities are separated at runtime.",
+      "Scan the source areas that anchor the guide and generated architecture manifests.",
   },
   {
     id: "hacks",
     icon: Wrench,
     label: "Hacks",
     description:
-      "Display hack patterns and temporary workarounds with context and lifecycle impact.",
+      "Browse runnable probes by numbered band, command, and execution safety.",
   },
 ];
 
 const shellInfo =
-  "The shell stays constant while each family renders its live architecture data from manifest JSON.";
+  "A source-linked technical map for the Codex turn lifecycle, sub-agent control plane, and probe catalog.";
 
 function App() {
   const [activeFamily, setActiveFamily] = useState<Family>("lifecycle");
@@ -66,12 +66,12 @@ function App() {
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      <main className="observatory-bg">
+      <main className="technical-map-shell">
         <div className="explorer-container">
           <header className="explorer-header">
             <div>
-              <p className="eyebrow">Architecture Explorer</p>
-              <h1>Codex Observatory</h1>
+              <p className="eyebrow">Architecture Map</p>
+              <h1>Codex Explorer</h1>
               <p>{shellInfo}</p>
             </div>
             <nav aria-label="Architecture families" className="family-switcher">

@@ -40,19 +40,50 @@ type PositionedLifecycleNode = LifecycleNode & {
   y: number;
   depth: number;
   index: number;
+  lane: GraphLane;
 };
 
-const lifecycleNodeHeight = 68;
-const verticalSpacing = 120;
-const horizontalSpacing = 360;
-const textWidth = (text: string) => Math.max(160, text.length * 8 + 32);
+type GraphLane = {
+  id: string;
+  label: string;
+};
+
+const lifecycleLanes: GraphLane[] = [
+  { id: "surface", label: "Surface" },
+  { id: "core", label: "Core session" },
+  { id: "model", label: "Model + tools" },
+  { id: "execution", label: "Execution" },
+  { id: "history", label: "History + projection" },
+];
+
+const lifecycleNodeHeight = 58;
+const lifecycleNodeWidth = 196;
+const verticalSpacing = 104;
+const laneWidth = 236;
+const laneHeaderHeight = 46;
+
+function laneForLifecycleNode(node: LifecycleNode): GraphLane {
+  if (node.id.includes("approval") || node.id.includes("execution")) {
+    return lifecycleLanes[3];
+  }
+  if (node.id.includes("user") || node.id.includes("app-server") || node.id === "exec") {
+    return lifecycleLanes[0];
+  }
+  if (node.id.includes("core")) {
+    return lifecycleLanes[1];
+  }
+  if (node.id.includes("model") || node.id.includes("tool")) {
+    return lifecycleLanes[2];
+  }
+  return lifecycleLanes[4];
+}
 
 function edgeColor(kind: string): string {
   switch (kind) {
     case "call":
-      return "var(--color-cyan)";
+      return "var(--accent)";
     case "state":
-      return "var(--color-amber)";
+      return "var(--execution)";
     case "spawn":
       return "#9dffb3";
     case "message":
@@ -60,7 +91,7 @@ function edgeColor(kind: string): string {
     case "event":
       return "#d7a8ff";
     default:
-      return "var(--color-muted)";
+      return "var(--text-muted)";
   }
 }
 
@@ -133,32 +164,37 @@ function layoutLifecycleGraph(
     }
   }
 
-  const layered = new Map<number, string[]>();
+  const laneRows = new Map<string, string[]>();
   for (const node of nodes) {
-    const depth = depthById.get(node.id) ?? 0;
-    const layer = layered.get(depth) ?? [];
-    layer.push(node.id);
-    layered.set(depth, layer);
+    const lane = laneForLifecycleNode(node);
+    const row = laneRows.get(lane.id) ?? [];
+    row.push(node.id);
+    laneRows.set(lane.id, row);
   }
 
   const positioned: PositionedLifecycleNode[] = [];
 
-  for (const [depth, nodeIds] of layered) {
+  for (const lane of lifecycleLanes) {
+    const nodeIds = laneRows.get(lane.id) ?? [];
+    nodeIds.sort(
+      (left, right) => (depthById.get(left) ?? 0) - (depthById.get(right) ?? 0),
+    );
     for (let index = 0; index < nodeIds.length; index += 1) {
       const id = nodeIds[index];
       const node = byId.get(id);
       if (node === undefined) {
         continue;
       }
-      const width = textWidth(node.label);
+      const laneIndex = lifecycleLanes.findIndex((candidate) => candidate.id === lane.id);
       const positionedNode: PositionedLifecycleNode = {
         ...node,
-        width,
+        width: lifecycleNodeWidth,
         height: lifecycleNodeHeight,
-        x: 24 + depth * horizontalSpacing,
-        y: 20 + index * verticalSpacing,
-        depth,
+        x: 24 + laneIndex * laneWidth,
+        y: laneHeaderHeight + 22 + index * verticalSpacing,
+        depth: depthById.get(node.id) ?? 0,
         index,
+        lane,
       };
       positioned.push(positionedNode);
     }
@@ -172,7 +208,7 @@ function layoutLifecycleGraph(
 
   return {
     nodes: positioned,
-    width: Math.max(700, maxX + 80),
+    width: Math.max(700, maxX + 32),
     height: Math.max(260, maxY + 80),
   };
 }
@@ -196,26 +232,34 @@ function renderLifecycleEdge(
   const labelY = (startY + endY) / 2;
   const labelX = (startX + endX) / 2;
 
+  const isQuietLifecycleEdge = edge.label === "lifecycle" || edge.label === edge.kind;
+
   return (
     <g key={`${from.id}-${to.id}-${index}`}>
-      <path d={d} stroke={edgeColor(edge.kind)} fill="none" strokeWidth={1.5} markerEnd="url(#arrow)" />
-      <text
-        x={labelX}
-        y={labelY - 5}
-        className="graph-edge-label"
-        textAnchor="middle"
-      >
-        {edge.label}
-      </text>
-      <text x={labelX} y={labelY + 12} className="graph-edge-kind" textAnchor="middle">
-        {edge.kind}
-      </text>
+      <path d={d} stroke={edgeColor(edge.kind)} fill="none" strokeWidth={1.4} markerEnd="url(#arrow)" />
+      {!isQuietLifecycleEdge && (
+        <text x={labelX} y={labelY - 5} className="graph-edge-label" textAnchor="middle">
+          {edge.label}
+        </text>
+      )}
     </g>
   );
 }
 
 function sortLifecycleWarnings(warnings: string[]): string[] {
   return [...warnings].sort((left, right) => left.localeCompare(right));
+}
+
+function basename(path: string | undefined): string {
+  if (path === undefined) {
+    return "source unknown";
+  }
+  return path.split("/").at(-1) ?? path;
+}
+
+function lifecycleNodeMeta(node: LifecycleNode): string {
+  const line = node.line ?? node.source_ref?.line;
+  return line === undefined ? basename(node.file) : `${basename(node.file)}:${line}`;
 }
 
 export function TurnLifecycleExplorer(): React.ReactElement {
@@ -275,6 +319,23 @@ export function TurnLifecycleExplorer(): React.ReactElement {
                     </marker>
                   </defs>
 
+                  <g className="graph-swimlanes">
+                    {lifecycleLanes.map((lane, index) => (
+                      <g key={lane.id} className="graph-lane">
+                        <rect
+                          x={12 + index * laneWidth}
+                          y={10}
+                          width={laneWidth - 24}
+                          height={graph.height - 24}
+                          rx={8}
+                          ry={8}
+                        />
+                        <text x={24 + index * laneWidth} y={34} className="graph-lane__label">
+                          {lane.label}
+                        </text>
+                      </g>
+                    ))}
+                  </g>
                   <g>
                     {manifest.edges.flatMap((edge, index) => {
                       const source = indexById.get(edge.from);
@@ -307,15 +368,15 @@ export function TurnLifecycleExplorer(): React.ReactElement {
                           y={node.y}
                           width={node.width}
                           height={node.height}
-                          rx={10}
-                          ry={10}
+                          rx={6}
+                          ry={6}
                           className="graph-node__box"
                         />
-                        <text x={node.x + 12} y={node.y + 28} className="graph-node__label">
+                        <text x={node.x + 12} y={node.y + 23} className="graph-node__label">
                           {node.label}
                         </text>
-                        <text x={node.x + 12} y={node.y + 48} className="graph-node__meta">
-                          {node.file ?? "No file"}:{node.line ?? "?"}
+                        <text x={node.x + 12} y={node.y + 42} className="graph-node__meta">
+                          {lifecycleNodeMeta(node)}
                         </text>
                         <title>{node.summary ?? node.label}</title>
                       </g>
