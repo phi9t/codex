@@ -1,0 +1,193 @@
+@import "tailwindcss";
+
+:root {
+  --color-void: #030711;
+  --color-panel: #0f1826;
+  --color-cyan: #23dae8;
+  --color-amber: #ffcc73;
+  --color-text: #edf3ff;
+  --color-muted: #9aa9c7;
+  --color-border: #1f3048;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  background:
+    radial-gradient(circle at 20% -10%, #17324f 0%, transparent 46%),
+    radial-gradient(circle at 120% 110%, #182a45 0%, transparent 34%),
+    var(--color-void);
+  color: var(--color-text);
+  padding: 2rem 1rem;
+  overflow-x: hidden;
+}
+
+.observatory-bg {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.explorer-container {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  padding: clamp(0.75rem, 2vw, 1.25rem);
+  display: grid;
+  gap: 1rem;
+}
+
+.explorer-header {
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-panel) 85%, black 15%);
+  padding: 1rem;
+  border-radius: 0.625rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.explorer-header h1 {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.85rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.explorer-header p {
+  margin: 0.4rem 0 0;
+  color: var(--color-muted);
+  line-height: 1.45;
+  max-width: 70ch;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-cyan);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.family-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.family-switch-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+  min-height: 2.5rem;
+}
+
+.family-switch-btn.is-active,
+.family-switch-btn:hover {
+  border-color: color-mix(in srgb, var(--color-cyan), transparent 20%);
+  background-color: color-mix(in srgb, var(--color-cyan), transparent 90%);
+  color: var(--color-text);
+}
+
+.family-switch-btn:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+.switch-icon,
+.summary-icon {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.panel {
+  border: 1px solid var(--color-border);
+  background: linear-gradient(
+    185deg,
+    color-mix(in srgb, var(--color-panel) 98%, black 2%),
+    var(--color-panel)
+  );
+  padding: 1rem;
+  border-radius: 0.625rem;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+  font-size: clamp(1.1rem, 2.8vw, 1.5rem);
+  overflow-wrap: anywhere;
+}
+
+.panel-title-row p {
+  margin: 0.35rem 0 0.85rem;
+  color: var(--color-muted);
+  line-height: 1.45;
+  max-width: 70ch;
+}
+
+.panel-summary {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.panel-summary li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 70ch;
+}
+
+.panel-summary span {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.panel-summary .summary-icon {
+  color: var(--color-cyan);
+}
+
+.panel-placeholder {
+  margin: 1rem 0 0;
+  padding: 0.75rem 0.85rem;
+  background: color-mix(in srgb, var(--color-void), transparent 35%);
+  border: 1px dashed var(--color-border);
+  border-radius: 0.5rem;
+  color: var(--color-muted);
+  line-height: 1.45;
+  max-width: 70ch;
+}
+
+@media (min-width: 720px) {
+  .explorer-header {
+    grid-template-columns: 1.1fr 1fr;
+  }
+
+  .family-switcher {
+    justify-content: flex-end;
+    align-self: end;
+  }
+}
