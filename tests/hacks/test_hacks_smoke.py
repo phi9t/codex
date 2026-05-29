@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,3 +35,60 @@ def test_hack_runs(script: Path) -> None:
     assert result.returncode == 0, (
         f"\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
+
+
+def test_explorer_manifest_has_lifecycle_edges() -> None:
+    with tempfile.NamedTemporaryFile(suffix=".json") as manifest_file:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "explorer/scripts/build_component_manifest.py",
+                "--repo-root",
+                str(ROOT),
+                "--out",
+                manifest_file.name,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_S,
+        )
+        assert result.returncode == 0, (
+            f"\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+
+        manifest = json.loads(Path(manifest_file.name).read_text(encoding="utf-8"))
+
+    assert manifest["edges"]
+    assert not [
+        warning
+        for warning in manifest["warnings"]
+        if warning.startswith("unknown mermaid endpoint:")
+    ]
+
+
+def test_explorer_manifest_covers_hack_catalog() -> None:
+    with tempfile.NamedTemporaryFile(suffix=".json") as manifest_file:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "explorer/scripts/build_component_manifest.py",
+                "--repo-root",
+                str(ROOT),
+                "--out",
+                manifest_file.name,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_S,
+        )
+        assert result.returncode == 0, (
+            f"\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+
+        manifest = json.loads(Path(manifest_file.name).read_text(encoding="utf-8"))
+
+    manifest_scripts = {hack["script"] for hack in manifest["hacks"]}
+    catalog_scripts = {f"hacks/{script.name}" for script in _scripts()}
+    assert manifest_scripts == catalog_scripts

@@ -11,7 +11,7 @@ HEADER_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$")
 SOURCE_REF_RE = re.compile(r"`([^`]+?\.(?:rs|md|py)):(\d+)`")
 HACK_REF_RE = re.compile(r"`(hacks/(\d{3})_[A-Za-z0-9_]+\.py)`")
 HACK_TABLE_ROW_RE = re.compile(
-    r"^\|\s*(\d+)\s*\|\s*`(hacks/\d{3}_[^`]+\.py)`\s*\|\s*§(\d+)\s*\|\s*([A-Za-z-]+)\s*\|\s*.*\|\s*$"
+    r"^\|\s*(\d+)\s*\|\s*`(hacks/\d{3}_[^`]+\.py)`\s*\|\s*§(\d+)\s*\|\s*([A-Za-z-]+)\s*\|\s*(.*?)\s*\|\s*$"
 )
 ARCH_TABLE_ROW_RE = re.compile(
     r"^\|\s*([^|]+)\s*\|\s*`([^`]+?\.(?:rs|md|py)):(\d+)`\s*\|\s*`([^`]+)`\s*\|.*$"
@@ -66,6 +66,7 @@ def parse_hack_table(text: str) -> dict[str, dict[str, str]]:
             "script": script,
             "section": match.group(3),
             "kind": match.group(4).lower(),
+            "desc": match.group(5).strip(),
         }
     return table
 
@@ -242,11 +243,19 @@ def build_sections(sections: list[dict], hack_table: dict[str, dict[str, str]], 
     return enriched
 
 
-def build_hacks(guide_text: str, hack_table: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+def build_hacks(
+    root: Path, guide_text: str, hack_table: dict[str, dict[str, str]]
+) -> list[dict[str, object]]:
     hacks_by_id: dict[str, dict[str, object]] = {}
-    for match in HACK_REF_RE.finditer(guide_text):
-        script = match.group(1)
-        hack_id = match.group(2)
+    guide_scripts = {
+        match.group(2): match.group(1) for match in HACK_REF_RE.finditer(guide_text)
+    }
+    catalog_scripts = {
+        path.stem.split("_", 1)[0]: f"hacks/{path.name}"
+        for path in sorted((root / "hacks").glob("[0-9][0-9][0-9]_*.py"))
+    }
+
+    for hack_id, script in sorted((catalog_scripts | guide_scripts).items()):
         if hack_id in hacks_by_id:
             continue
 
@@ -263,7 +272,7 @@ def build_hacks(guide_text: str, hack_table: dict[str, dict[str, str]]) -> list[
             "kind": kind,
             "gated": hack_id == "140" or hack_id.startswith("9"),
             "command": f"python3 {script}",
-            "desc": "",
+            "desc": table_info.get("desc", "") if table_info else "",
             "expected_shape": "prints stable section labels and exits 0",
         }
     return sorted(hacks_by_id.values(), key=lambda item: item["id"])
@@ -285,7 +294,7 @@ def main() -> None:
     source_refs = parse_source_refs(guide_text)
     enriched_sections = build_sections(sections, hack_table, source_refs)
     nodes, edges, arch_warnings = parse_arch_nodes_and_edges(sections, source_refs)
-    hacks = build_hacks(guide_text, hack_table)
+    hacks = build_hacks(root, guide_text, hack_table)
     warnings = validate_source_refs(root, source_refs) + arch_warnings
 
     manifest = {
