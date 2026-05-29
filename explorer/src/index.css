@@ -226,7 +226,7 @@ select {
 .graph-lane rect {
   fill: #f7f9fb;
   stroke: var(--border);
-  stroke-width: 1;
+  stroke-width: 1.15;
 }
 
 .graph-lane:nth-child(even) rect {
@@ -234,7 +234,7 @@ select {
 }
 
 .graph-lane__label {
-  fill: var(--text-secondary);
+  fill: var(--accent-strong);
   font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -249,6 +249,7 @@ select {
   stroke: var(--border-strong);
   stroke-width: 1.2;
   fill: var(--surface-shell);
+  filter: drop-shadow(0 1px 0 rgb(23 32 42 / 0.04));
 }
 
 .graph-node:hover .graph-node__box,
@@ -272,16 +273,54 @@ select {
 .graph-edge-label {
   fill: var(--text-secondary);
   font-size: 0.68rem;
-  paint-order: stroke;
-  stroke: var(--surface-panel);
-  stroke-width: 4px;
+  font-weight: 700;
+  pointer-events: none;
 }
 
-.detail-drawer {
+.graph-edge-label__bg {
+  fill: var(--surface-shell);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.graph-svg path {
+  opacity: 0.9;
+}
+
+.detail-drawer,
+.deep-dive-panel {
   border: 1px solid var(--border);
   background: var(--surface-shell);
   border-radius: 0.5rem;
   padding: 0.85rem;
+}
+
+.deep-dive-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.deep-dive-panel header {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.deep-dive-panel h3,
+.deep-dive-panel p {
+  margin: 0;
+}
+
+.deep-dive-panel > p {
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 92ch;
+}
+
+.deep-dive-panel a,
+.detail-grid a {
+  color: var(--accent-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .detail-drawer__header {
@@ -485,6 +524,7 @@ select {
   .graph-wrap,
   .subagent-legend,
   .source-list,
+  .deep-dive-panel,
   .subsystem-list,
   .hack-sections {
     grid-column: 1 / -1;

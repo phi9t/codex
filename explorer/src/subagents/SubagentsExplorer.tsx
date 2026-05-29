@@ -51,6 +51,21 @@ const nodeWidth = 192;
 const rowSpacing = 104;
 const columnSpacing = 232;
 const laneHeaderHeight = 46;
+const sourceRoot = "https://github.com/phi9t/codex/blob/phi9t-mainline";
+const subagentGuideHref = `${sourceRoot}/CODEX_HACKERS_GUIDE.md#14-sub-agents-and-collaboration`;
+
+const subagentDeepDives: Record<string, string> = {
+  "agent-control":
+    "AgentControl coordinates lifecycle operations for spawned collaborators and is the entry point for control-plane actions.",
+  "agent-registry":
+    "AgentRegistry owns spawn slots, parent-child relationships, depth checks, and lookup of running collaboration agents.",
+  mailbox:
+    "Mailbox is the delivery boundary for messages exchanged with a collaborator so control flow does not depend on direct task internals.",
+  "subagent-source":
+    "SubAgentSource records how a collaborator was created so protocol consumers can distinguish user, tool, and resumed-origin agents.",
+  "collab-item-mapping":
+    "The app-server event mapper projects collaboration tool-call events into thread items clients can display consistently.",
+};
 
 function laneForSubagentNode(node: SubagentNode): GraphLane {
   return subagentLanes.find((lane) => lane.id === node.group) ?? subagentLanes[0];
@@ -194,7 +209,7 @@ function layoutSubagentGraph(
   return {
     nodes: positioned,
     width: Math.max(700, positioned.reduce((max, node) => Math.max(max, node.x + node.width), 0) + 32),
-    height: Math.max(240, positioned.reduce((max, node) => Math.max(max, node.y + node.height), 0) + 80),
+    height: Math.max(240, positioned.reduce((max, node) => Math.max(max, node.y + node.height), 0) + 120),
   };
 }
 
@@ -204,17 +219,18 @@ function renderEdge(
   edge: SubagentEdge,
   edgeIndex: number,
 ) {
-  const startX = from.x + from.width;
+  const isBackwardEdge = to.x < from.x;
+  const startX = isBackwardEdge ? from.x : from.x + from.width;
   const startY = from.y + from.height / 2;
-  const endX = to.x;
+  const endX = isBackwardEdge ? to.x + to.width : to.x;
   const endY = to.y + to.height / 2;
-  const delta = Math.max(30, Math.abs(endX - startX) / 2);
-  const ctrl1X = endX > startX ? startX + delta : startX - delta;
-  const ctrl2X = endX > startX ? endX - delta : endX + delta;
-
-  const d = `M ${startX} ${startY} C ${ctrl1X} ${startY}, ${ctrl2X} ${endY}, ${endX} ${endY}`;
-  const centerX = (startX + endX) / 2;
-  const centerY = (startY + endY) / 2;
+  const routeY = Math.max(startY, endY) + 42 + (edgeIndex % 3) * 16;
+  const midX = startX + Math.max(28, (endX - startX) / 2);
+  const d = isBackwardEdge
+    ? `M ${startX} ${startY} L ${startX - 18} ${startY} L ${startX - 18} ${routeY} L ${endX + 18} ${routeY} L ${endX + 18} ${endY} L ${endX} ${endY}`
+    : `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`;
+  const labelX = isBackwardEdge ? (startX + endX) / 2 : midX;
+  const labelY = isBackwardEdge ? routeY - 7 : Math.min(startY, endY) - 8 - (edgeIndex % 2) * 18;
 
   return (
     <g key={`${from.id}-${to.id}-${edgeIndex}`}>
@@ -225,8 +241,26 @@ function renderEdge(
         fill="none"
         markerEnd="url(#arrow-subagents)"
       />
-      <text x={centerX} y={centerY - 5} className="graph-edge-label" textAnchor="middle">
-        {edge.label}
+      {renderEdgeLabelBadge(labelX, labelY, edge.label)}
+    </g>
+  );
+}
+
+function renderEdgeLabelBadge(x: number, y: number, label: string): React.ReactElement {
+  const width = Math.max(54, label.length * 6.4 + 18);
+  return (
+    <g className="graph-edge-label" aria-hidden>
+      <rect
+        className="graph-edge-label__bg"
+        x={x - width / 2}
+        y={y - 15}
+        width={width}
+        height={19}
+        rx={5}
+        ry={5}
+      />
+      <text x={x} y={y - 2} textAnchor="middle">
+        {label}
       </text>
     </g>
   );
@@ -241,6 +275,17 @@ function basename(path: string | undefined): string {
     return "file unknown";
   }
   return path.split("/").at(-1) ?? path;
+}
+
+function sourceHref(node: SubagentNode): string | undefined {
+  if (node.file === undefined) {
+    return undefined;
+  }
+  return `${sourceRoot}/${node.file}`;
+}
+
+function subagentDeepDive(node: SubagentNode): string {
+  return subagentDeepDives[node.id] ?? "This node participates in the Codex collaboration control plane described by the sub-agent guide section.";
 }
 
 export function SubagentsExplorer(): React.ReactElement {
@@ -274,6 +319,9 @@ export function SubagentsExplorer(): React.ReactElement {
         {(manifest) => {
           const graph = layoutSubagentGraph(manifest.nodes, manifest.edges);
           const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+          const activeNode =
+            selectedNode ?? graph.nodes.find((node) => node.id === "agent-control") ?? graph.nodes[0] ?? null;
+          const activeSourceHref = activeNode === null ? undefined : sourceHref(activeNode);
           const groupedNodes = new Map<string, SubagentNode[]>();
           for (const node of manifest.nodes) {
             const bucket = groupedNodes.get(node.group) ?? [];
@@ -384,6 +432,45 @@ export function SubagentsExplorer(): React.ReactElement {
                   <li key={item}>{item}</li>
                 ))}
               </ul>
+              <section className="deep-dive-panel" aria-label="Subagent code deep dive">
+                {activeNode === null ? (
+                  <p>No subagent node available.</p>
+                ) : (
+                  <>
+                    <header>
+                      <p className="eyebrow">Code deep dive</p>
+                      <h3>{activeNode.label}</h3>
+                    </header>
+                    <p>{subagentDeepDive(activeNode)}</p>
+                    <dl className="detail-grid">
+                      <div>
+                        <dt>Implementation</dt>
+                        <dd>
+                          {activeSourceHref === undefined ? (
+                            "Source location unavailable"
+                          ) : (
+                            <a href={activeSourceHref} target="_blank" rel="noreferrer">
+                              {activeNode.file}
+                            </a>
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Group</dt>
+                        <dd>{activeNode.group}</dd>
+                      </div>
+                      <div>
+                        <dt>Guide</dt>
+                        <dd>
+                          <a href={subagentGuideHref} target="_blank" rel="noreferrer">
+                            CODEX_HACKERS_GUIDE.md §14
+                          </a>
+                        </dd>
+                      </div>
+                    </dl>
+                  </>
+                )}
+              </section>
               <DetailDrawer
                 isOpen={selectedNode !== null}
                 title={selectedNode?.label ?? "Subagent node"}

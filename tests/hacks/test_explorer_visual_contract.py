@@ -31,3 +31,19 @@ def test_graph_views_render_swimlanes() -> None:
     assert "laneForLifecycleNode" in lifecycle
     assert "laneForSubagentNode" in subagents
     assert ".graph-lane" in css
+
+
+def test_graph_views_control_edges_and_show_code_deep_dive() -> None:
+    lifecycle = read("explorer/src/lifecycle/TurnLifecycleExplorer.tsx")
+    subagents = read("explorer/src/subagents/SubagentsExplorer.tsx")
+    css = read("explorer/src/index.css")
+
+    assert "renderEdgeLabelBadge" in lifecycle
+    assert "renderEdgeLabelBadge" in subagents
+    assert "graph-edge-label__bg" in css
+    assert "deep-dive-panel" in lifecycle
+    assert "deep-dive-panel" in subagents
+    assert "sourceHref" in lifecycle
+    assert "sourceHref" in subagents
+    assert "CODEX_HACKERS_GUIDE.md" in lifecycle
+    assert "CODEX_HACKERS_GUIDE.md" in subagents
