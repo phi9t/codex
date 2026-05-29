@@ -34,12 +34,6 @@
       }
     },
     {
-      "id": "approvals-and-sandbox",
-      "label": "Approvals and sandbox",
-      "section": "2",
-      "summary": "Approvals and sandbox"
-    },
-    {
       "id": "core-session",
       "label": "Core session",
       "file": "codex-rs/core/src/session/mod.rs",
@@ -66,18 +60,6 @@
       }
     },
     {
-      "id": "execution-mcp-patch",
-      "label": "Execution / MCP / patch",
-      "section": "2",
-      "summary": "Execution / MCP / patch"
-    },
-    {
-      "id": "model-stream",
-      "label": "Model stream",
-      "section": "2",
-      "summary": "Model stream"
-    },
-    {
       "id": "protocol",
       "label": "Protocol",
       "file": "codex-rs/protocol/src/protocol.rs",
@@ -91,18 +73,6 @@
       }
     },
     {
-      "id": "thread-history",
-      "label": "Thread history",
-      "section": "2",
-      "summary": "Thread history"
-    },
-    {
-      "id": "tool-dispatch",
-      "label": "Tool dispatch",
-      "section": "2",
-      "summary": "Tool dispatch"
-    },
-    {
       "id": "tui",
       "label": "TUI",
       "file": "codex-rs/tui/src/app_command.rs",
@@ -114,58 +84,9 @@
         "file": "codex-rs/tui/src/app_command.rs",
         "line": 39
       }
-    },
-    {
-      "id": "user-surface",
-      "label": "User surface",
-      "section": "2",
-      "summary": "User surface"
     }
   ],
-  "edges": [
-    {
-      "from": "user-surface",
-      "to": "core-session",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "core-session",
-      "to": "model-stream",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "model-stream",
-      "to": "tool-dispatch",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "tool-dispatch",
-      "to": "approvals-and-sandbox",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "approvals-and-sandbox",
-      "to": "execution-mcp-patch",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "execution-mcp-patch",
-      "to": "thread-history",
-      "kind": "flow",
-      "label": "lifecycle"
-    },
-    {
-      "from": "thread-history",
-      "to": "user-surface",
-      "kind": "flow",
-      "label": "lifecycle"
-    }
-  ],
+  "edges": [],
   "sections": [
     {
       "section": "1",
@@ -299,5 +220,12 @@
       "line": 75
     }
   ],
-  "warnings": []
+  "warnings": [
+    "unknown mermaid endpoint: Approvals and sandbox",
+    "unknown mermaid endpoint: Execution / MCP / patch",
+    "unknown mermaid endpoint: Model stream",
+    "unknown mermaid endpoint: Thread history",
+    "unknown mermaid endpoint: Tool dispatch",
+    "unknown mermaid endpoint: User surface"
+  ]
 }

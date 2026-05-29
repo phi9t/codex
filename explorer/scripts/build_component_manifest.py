@@ -97,13 +97,17 @@ def validate_source_refs(
     return sorted(set(warnings))
 
 
-def parse_arch_nodes_and_edges(sections: list[dict], source_refs: list[dict[str, int | str]]) -> tuple[list[dict], list[dict]]:
+def parse_arch_nodes_and_edges(
+    sections: list[dict], source_refs: list[dict[str, int | str]]
+) -> tuple[list[dict], list[dict], list[str]]:
     arch_section = next((s for s in sections if s["section"] == "2"), None)
     if arch_section is None:
-        return [], []
+        return [], [], []
 
     body = arch_section["body"].splitlines()
-    nodes_by_label = {}
+    label_to_id: dict[str, str] = {}
+    used_ids = set[str]()
+    warnings: list[str] = []
     nodes = []
     section_source_lookup = {
         (ref["file"], int(ref["line"])): {"file": ref["file"], "line": int(ref["line"])}
@@ -114,20 +118,39 @@ def parse_arch_nodes_and_edges(sections: list[dict], source_refs: list[dict[str,
         node_id = re.sub(r"[^a-z0-9]+", "-", label.lower())
         return node_id.strip("-")
 
+    def unique_node_id(label: str) -> str:
+        base_id = as_node_id(label) or "node"
+        candidate = base_id
+        index = 1
+        while candidate in used_ids:
+            index += 1
+            candidate = f"{base_id}-{index}"
+
+        if candidate != (base_id or "node") and "-" in candidate:
+            warnings.append(
+                f"normalized node id collision: {base_id} for label '{label}'"
+            )
+        used_ids.add(candidate)
+        return candidate
+
+    def add_warning_once(message: str) -> None:
+        if message not in warnings:
+            warnings.append(message)
+
     for line in body:
         row = ARCH_TABLE_ROW_RE.match(line)
         if not row:
             continue
         label = row.group(1).strip()
+        if label in label_to_id:
+            add_warning_once(f"duplicate architecture node label: {label}; keeping first definition")
+            continue
         file = row.group(2).strip()
         line_no = int(row.group(3))
         symbol = row.group(4).strip()
-        node_id = as_node_id(label)
+        node_id = unique_node_id(label)
 
-        if node_id in nodes_by_label:
-            continue
-
-        nodes_by_label[label] = node_id
+        label_to_id[label] = node_id
         nodes.append(
             {
                 "id": node_id,
@@ -165,31 +188,15 @@ def parse_arch_nodes_and_edges(sections: list[dict], source_refs: list[dict[str,
 
         from_label = resolve_label(match.group(1), match.group(2))
         to_label = resolve_label(match.group(3), match.group(4))
-        if from_label not in nodes_by_label:
-            nodes_by_label[from_label] = as_node_id(from_label)
-            nodes.append(
-                {
-                    "id": nodes_by_label[from_label],
-                    "label": from_label,
-                    "section": arch_section["section"],
-                    "summary": from_label,
-                }
-            )
-        if to_label not in nodes_by_label:
-            nodes_by_label[to_label] = as_node_id(to_label)
-            nodes.append(
-                {
-                    "id": nodes_by_label[to_label],
-                    "label": to_label,
-                    "section": arch_section["section"],
-                    "summary": to_label,
-                }
-            )
-
-        from_id = nodes_by_label.get(from_label)
-        to_id = nodes_by_label.get(to_label)
-        if not from_id or not to_id:
+        from_id = label_to_id.get(from_label)
+        to_id = label_to_id.get(to_label)
+        if from_id is None:
+            add_warning_once(f"unknown mermaid endpoint: {from_label}")
             continue
+        if to_id is None:
+            add_warning_once(f"unknown mermaid endpoint: {to_label}")
+            continue
+
         edge_key = (from_id, to_id)
         if edge_key in seen_edges:
             continue
@@ -203,7 +210,7 @@ def parse_arch_nodes_and_edges(sections: list[dict], source_refs: list[dict[str,
             }
         )
 
-    return sorted(nodes, key=lambda n: n["id"]), edges
+    return sorted(nodes, key=lambda n: n["id"]), edges, warnings
 
 
 def build_sections(sections: list[dict], hack_table: dict[str, dict[str, str]], source_refs: list[dict[str, int | str]]) -> list[dict]:
@@ -277,8 +284,9 @@ def main() -> None:
     hack_table = parse_hack_table(guide_text)
     source_refs = parse_source_refs(guide_text)
     enriched_sections = build_sections(sections, hack_table, source_refs)
-    nodes, edges = parse_arch_nodes_and_edges(sections, source_refs)
+    nodes, edges, arch_warnings = parse_arch_nodes_and_edges(sections, source_refs)
     hacks = build_hacks(guide_text, hack_table)
+    warnings = validate_source_refs(root, source_refs) + arch_warnings
 
     manifest = {
         "guide": args.guide,
@@ -288,7 +296,7 @@ def main() -> None:
         "sections": enriched_sections,
         "hacks": hacks,
         "source_refs": source_refs,
-        "warnings": validate_source_refs(root, source_refs),
+        "warnings": sorted(set(warnings)),
     }
 
     out = root / args.out
