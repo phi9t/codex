@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "id": "root-thread",
+      "label": "Root thread",
+      "group": "thread"
+    },
+    {
+      "id": "agent-control",
+      "label": "AgentControl",
+      "group": "control",
+      "file": "codex-rs/core/src/agent/control.rs"
+    },
+    {
+      "id": "registry",
+      "label": "AgentRegistry",
+      "group": "control",
+      "file": "codex-rs/core/src/agent/registry.rs"
+    },
+    {
+      "id": "child-thread",
+      "label": "Child thread",
+      "group": "thread"
+    },
+    {
+      "id": "mailbox",
+      "label": "Mailbox",
+      "group": "message",
+      "file": "codex-rs/core/src/agent/mailbox.rs"
+    },
+    {
+      "id": "event-mapping",
+      "label": "Collab event mapping",
+      "group": "protocol",
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs"
+    }
+  ],
+  "edges": [
+    {
+      "from": "root-thread",
+      "to": "agent-control",
+      "label": "spawn_agent",
+      "kind": "call"
+    },
+    {
+      "from": "agent-control",
+      "to": "registry",
+      "label": "reserve",
+      "kind": "state"
+    },
+    {
+      "from": "agent-control",
+      "to": "child-thread",
+      "label": "start",
+      "kind": "spawn"
+    },
+    {
+      "from": "root-thread",
+      "to": "mailbox",
+      "label": "send",
+      "kind": "message"
+    },
+    {
+      "from": "child-thread",
+      "to": "event-mapping",
+      "label": "status",
+      "kind": "event"
+    }
+  ],
+  "warnings": []
+}

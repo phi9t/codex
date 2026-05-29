@@ -1,0 +1,131 @@
+{
+  "guide": "CODEX_HACKERS_GUIDE.md",
+  "families": [
+    "lifecycle",
+    "subagents",
+    "subsystems",
+    "hacks"
+  ],
+  "nodes": [],
+  "edges": [],
+  "sections": [
+    {
+      "section": "1",
+      "title": "How to read this guide",
+      "related_hacks": []
+    },
+    {
+      "section": "2",
+      "title": "30-second architecture",
+      "related_hacks": []
+    },
+    {
+      "section": "3",
+      "title": "Turn lifecycle overview",
+      "related_hacks": []
+    },
+    {
+      "section": "14",
+      "title": "Sub-agents and collaboration",
+      "related_hacks": []
+    },
+    {
+      "section": "18",
+      "title": "Hands-on hacks",
+      "related_hacks": []
+    }
+  ],
+  "hacks": [
+    {
+      "id": "001",
+      "script": "hacks/001_protocol_lifecycle.py",
+      "title": "protocol lifecycle",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/001_protocol_lifecycle.py",
+      "desc": "",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "010",
+      "script": "hacks/010_capstone_stub_turn.py",
+      "title": "capstone stub turn",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/010_capstone_stub_turn.py",
+      "desc": "",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "100",
+      "script": "hacks/100_agent_registry_limits.py",
+      "title": "agent registry limits",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/100_agent_registry_limits.py",
+      "desc": "",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "107",
+      "script": "hacks/107_capstone_stub_subagents.py",
+      "title": "capstone stub subagents",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/107_capstone_stub_subagents.py",
+      "desc": "",
+      "expected_shape": "prints stable section labels and exits 0"
+    }
+  ],
+  "source_refs": [
+    {
+      "file": "codex-rs/tui/src/app_command.rs",
+      "line": 39
+    },
+    {
+      "file": "codex-rs/exec/src/lib.rs",
+      "line": 770
+    },
+    {
+      "file": "codex-rs/app-server/README.md",
+      "line": 76
+    },
+    {
+      "file": "codex-rs/core/src/session/mod.rs",
+      "line": 366
+    },
+    {
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 1262
+    },
+    {
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 30
+    },
+    {
+      "file": "codex-rs/core/src/agent/control.rs",
+      "line": 136
+    },
+    {
+      "file": "codex-rs/core/src/agent/registry.rs",
+      "line": 23
+    },
+    {
+      "file": "codex-rs/core/src/agent/mailbox.rs",
+      "line": 11
+    },
+    {
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 2564
+    },
+    {
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 75
+    }
+  ],
+  "warnings": []
+}
