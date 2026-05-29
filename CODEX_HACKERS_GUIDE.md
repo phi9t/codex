@@ -25,7 +25,7 @@ Probe IDs use three digits so the catalog can grow into hundreds of focused exer
 | Exec | `codex-rs/exec/src/lib.rs:770` | `TurnStartParams` |
 | App server | `codex-rs/app-server/README.md:76` | `Core Primitives` |
 | Core session | `codex-rs/core/src/session/mod.rs:366` | `struct Codex` |
-| Protocol | `codex-rs/protocol/src/protocol.rs:1433` | `enum EventMsg` |
+| Protocol | `codex-rs/protocol/src/protocol.rs:1262` | `enum EventMsg` |
 | App event mapping | `codex-rs/app-server-protocol/src/protocol/event_mapping.rs:30` | `fn item_event_to_server_notification` |
 
 ```mermaid
