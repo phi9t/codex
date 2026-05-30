@@ -283,6 +283,19 @@ select {
   stroke-width: 1;
 }
 
+.graph-edge-marker circle {
+  fill: var(--surface-shell);
+  stroke: var(--accent);
+  stroke-width: 1.2;
+}
+
+.graph-edge-marker text {
+  fill: var(--accent-strong);
+  font-size: 0.62rem;
+  font-weight: 800;
+  pointer-events: none;
+}
+
 .graph-svg path {
   opacity: 0.9;
 }
@@ -410,10 +423,18 @@ select {
   overflow-wrap: anywhere;
 }
 
-.subagent-legend {
+.subagent-legend,
+.relationship-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.relationship-strip {
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--surface-panel);
 }
 
 .subagent-pill {
@@ -426,6 +447,35 @@ select {
   padding: 0.2rem 0.5rem;
   color: var(--text-secondary);
   font-size: 0.84rem;
+}
+
+.relationship-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface-shell);
+  color: var(--text-secondary);
+  padding: 0.22rem 0.55rem 0.22rem 0.32rem;
+  font-size: 0.82rem;
+}
+
+.relationship-chip strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+}
+
+.relationship-chip small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
 }
 
 .subagent-pill__swatch {
@@ -523,6 +573,7 @@ select {
 
   .graph-wrap,
   .subagent-legend,
+  .relationship-strip,
   .source-list,
   .deep-dive-panel,
   .subsystem-list,

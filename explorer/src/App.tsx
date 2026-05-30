@@ -1,5 +1,5 @@
 import { Cpu, Orbit, Puzzle, Wrench } from "lucide-react";
-import { type ComponentType, type ReactElement, useState } from "react";
+import { type ComponentType, type ReactElement, useEffect, useState } from "react";
 
 import { HacksExplorer } from "./hacks/HacksExplorer";
 import { SubagentsExplorer } from "./subagents/SubagentsExplorer";
@@ -49,8 +49,21 @@ const familyConfigs: FamilyConfig[] = [
 const shellInfo =
   "A source-linked technical map for the Codex turn lifecycle, sub-agent control plane, and probe catalog.";
 
+function familyFromHash(): Family {
+  const candidate = window.location.hash.replace(/^#/, "");
+  return familyConfigs.some((family) => family.id === candidate)
+    ? (candidate as Family)
+    : "lifecycle";
+}
+
 function App() {
-  const [activeFamily, setActiveFamily] = useState<Family>("lifecycle");
+  const [activeFamily, setActiveFamily] = useState<Family>(() => familyFromHash());
+
+  useEffect(() => {
+    const onHashChange = () => setActiveFamily(familyFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const activeConfig = familyConfigs.find((family) => family.id === activeFamily) ?? familyConfigs[0];
 
@@ -84,7 +97,10 @@ function App() {
                     type="button"
                     className={`family-switch-btn${active ? " is-active" : ""}`}
                     aria-pressed={active}
-                    onClick={() => setActiveFamily(family.id)}
+                    onClick={() => {
+                      window.location.hash = family.id;
+                      setActiveFamily(family.id);
+                    }}
                   >
                     <Icon className="switch-icon" aria-hidden />
                     <span>{family.label}</span>

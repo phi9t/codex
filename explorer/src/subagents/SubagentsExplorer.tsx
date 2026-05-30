@@ -40,35 +40,46 @@ type GraphLane = {
 };
 
 const subagentLanes: GraphLane[] = [
-  { id: "control", label: "Control" },
-  { id: "thread", label: "Thread" },
-  { id: "message", label: "Mailbox" },
-  { id: "protocol", label: "Protocol" },
+  { id: "root", label: "Root thread" },
+  { id: "control", label: "Control plane" },
+  { id: "runtime", label: "Collaboration runtime" },
+  { id: "projection", label: "Projection" },
 ];
 
 const nodeHeight = 58;
-const nodeWidth = 192;
-const rowSpacing = 104;
-const columnSpacing = 232;
+const nodeWidth = 204;
+const rowSpacing = 108;
+const columnSpacing = 260;
 const laneHeaderHeight = 46;
 const sourceRoot = "https://github.com/phi9t/codex/blob/phi9t-mainline";
 const subagentGuideHref = `${sourceRoot}/CODEX_HACKERS_GUIDE.md#14-sub-agents-and-collaboration`;
 
 const subagentDeepDives: Record<string, string> = {
+  "root-thread":
+    "The root thread is the user-facing session that requests collaboration work and owns the parent side of spawned agent communication.",
   "agent-control":
     "AgentControl coordinates lifecycle operations for spawned collaborators and is the entry point for control-plane actions.",
-  "agent-registry":
+  registry:
     "AgentRegistry owns spawn slots, parent-child relationships, depth checks, and lookup of running collaboration agents.",
+  "child-thread":
+    "The child thread runs the collaborator turn with isolated task context while still reporting progress through the parent thread.",
   mailbox:
     "Mailbox is the delivery boundary for messages exchanged with a collaborator so control flow does not depend on direct task internals.",
-  "subagent-source":
-    "SubAgentSource records how a collaborator was created so protocol consumers can distinguish user, tool, and resumed-origin agents.",
-  "collab-item-mapping":
+  "event-mapping":
     "The app-server event mapper projects collaboration tool-call events into thread items clients can display consistently.",
 };
 
 function laneForSubagentNode(node: SubagentNode): GraphLane {
-  return subagentLanes.find((lane) => lane.id === node.group) ?? subagentLanes[0];
+  if (node.id === "root-thread") {
+    return subagentLanes[0];
+  }
+  if (node.id === "agent-control" || node.id === "registry") {
+    return subagentLanes[1];
+  }
+  if (node.id === "child-thread" || node.id === "mailbox") {
+    return subagentLanes[2];
+  }
+  return subagentLanes[3];
 }
 
 function groupColors(group: string): string {
@@ -209,7 +220,7 @@ function layoutSubagentGraph(
   return {
     nodes: positioned,
     width: Math.max(700, positioned.reduce((max, node) => Math.max(max, node.x + node.width), 0) + 32),
-    height: Math.max(240, positioned.reduce((max, node) => Math.max(max, node.y + node.height), 0) + 120),
+    height: Math.max(260, positioned.reduce((max, node) => Math.max(max, node.y + node.height), 0) + 116),
   };
 }
 
@@ -219,18 +230,38 @@ function renderEdge(
   edge: SubagentEdge,
   edgeIndex: number,
 ) {
+  const isSameLane = from.lane.id === to.lane.id;
+  if (isSameLane) {
+    const centerX = from.x + from.width / 2;
+    const startY = from.y + from.height;
+    const endY = to.y;
+    const d = `M ${centerX} ${startY} L ${centerX} ${endY}`;
+    return (
+      <g key={`${from.id}-${to.id}-${edgeIndex}`}>
+        <path
+          d={d}
+          stroke={edgeColor(edge.kind)}
+          strokeWidth={1.45}
+          fill="none"
+          markerEnd="url(#arrow-subagents)"
+        />
+        {renderEdgeMarker(centerX, (startY + endY) / 2, edgeIndex + 1)}
+      </g>
+    );
+  }
+
   const isBackwardEdge = to.x < from.x;
   const startX = isBackwardEdge ? from.x : from.x + from.width;
   const startY = from.y + from.height / 2;
   const endX = isBackwardEdge ? to.x + to.width : to.x;
   const endY = to.y + to.height / 2;
-  const routeY = Math.max(startY, endY) + 42 + (edgeIndex % 3) * 16;
+  const routeY = Math.max(startY, endY) + 46 + (edgeIndex % 3) * 20;
   const midX = startX + Math.max(28, (endX - startX) / 2);
   const d = isBackwardEdge
     ? `M ${startX} ${startY} L ${startX - 18} ${startY} L ${startX - 18} ${routeY} L ${endX + 18} ${routeY} L ${endX + 18} ${endY} L ${endX} ${endY}`
     : `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${endY} L ${endX} ${endY}`;
-  const labelX = isBackwardEdge ? (startX + endX) / 2 : midX;
-  const labelY = isBackwardEdge ? routeY - 7 : Math.min(startY, endY) - 8 - (edgeIndex % 2) * 18;
+  const markerX = isBackwardEdge ? (startX + endX) / 2 : midX;
+  const markerY = isBackwardEdge ? routeY : (startY + endY) / 2;
 
   return (
     <g key={`${from.id}-${to.id}-${edgeIndex}`}>
@@ -241,26 +272,17 @@ function renderEdge(
         fill="none"
         markerEnd="url(#arrow-subagents)"
       />
-      {renderEdgeLabelBadge(labelX, labelY, edge.label)}
+      {renderEdgeMarker(markerX, markerY, edgeIndex + 1)}
     </g>
   );
 }
 
-function renderEdgeLabelBadge(x: number, y: number, label: string): React.ReactElement {
-  const width = Math.max(54, label.length * 6.4 + 18);
+function renderEdgeMarker(x: number, y: number, index: number): React.ReactElement {
   return (
-    <g className="graph-edge-label" aria-hidden>
-      <rect
-        className="graph-edge-label__bg"
-        x={x - width / 2}
-        y={y - 15}
-        width={width}
-        height={19}
-        rx={5}
-        ry={5}
-      />
-      <text x={x} y={y - 2} textAnchor="middle">
-        {label}
+    <g className="graph-edge-marker" aria-hidden>
+      <circle cx={x} cy={y} r={10} />
+      <text x={x} y={y + 3} textAnchor="middle">
+        {index}
       </text>
     </g>
   );
@@ -424,6 +446,15 @@ export function SubagentsExplorer(): React.ReactElement {
                       style={{ backgroundColor: groupColors(group) }}
                     />
                     {group}
+                  </span>
+                ))}
+              </div>
+              <div className="relationship-strip" aria-label="Subagent relationships">
+                {manifest.edges.map((edge, index) => (
+                  <span key={`${edge.from}-${edge.to}-${edge.label}`} className="relationship-chip">
+                    <strong>{index + 1}</strong>
+                    <span>{edge.label}</span>
+                    <small>{edge.kind}</small>
                   </span>
                 ))}
               </div>

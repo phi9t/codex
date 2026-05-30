@@ -39,7 +39,7 @@ def test_graph_views_control_edges_and_show_code_deep_dive() -> None:
     css = read("explorer/src/index.css")
 
     assert "renderEdgeLabelBadge" in lifecycle
-    assert "renderEdgeLabelBadge" in subagents
+    assert "renderEdgeMarker" in subagents
     assert "graph-edge-label__bg" in css
     assert "deep-dive-panel" in lifecycle
     assert "deep-dive-panel" in subagents
@@ -47,3 +47,16 @@ def test_graph_views_control_edges_and_show_code_deep_dive() -> None:
     assert "sourceHref" in subagents
     assert "CODEX_HACKERS_GUIDE.md" in lifecycle
     assert "CODEX_HACKERS_GUIDE.md" in subagents
+
+
+def test_subagent_graph_uses_flow_lanes_and_relationship_strip() -> None:
+    subagents = read("explorer/src/subagents/SubagentsExplorer.tsx")
+    css = read("explorer/src/index.css")
+
+    assert "Root thread" in subagents
+    assert "Control plane" in subagents
+    assert "Collaboration runtime" in subagents
+    assert "Projection" in subagents
+    assert "relationship-strip" in subagents
+    assert "renderEdgeMarker" in subagents
+    assert ".relationship-strip" in css
