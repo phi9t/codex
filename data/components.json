@@ -1,0 +1,532 @@
+{
+  "guide": "CODEX_HACKERS_GUIDE.md",
+  "families": [
+    "lifecycle",
+    "subagents",
+    "subsystems",
+    "hacks"
+  ],
+  "nodes": [
+    {
+      "id": "app-event-mapping",
+      "label": "App event mapping",
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 30,
+      "symbol": "fn item_event_to_server_notification",
+      "section": "2",
+      "summary": "App event mapping",
+      "source_ref": {
+        "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+        "line": 30
+      }
+    },
+    {
+      "id": "app-server",
+      "label": "App server",
+      "file": "codex-rs/app-server/README.md",
+      "line": 76,
+      "symbol": "Core Primitives",
+      "section": "2",
+      "summary": "App server",
+      "source_ref": {
+        "file": "codex-rs/app-server/README.md",
+        "line": 76
+      }
+    },
+    {
+      "id": "approvals-and-sandbox",
+      "label": "Approvals and sandbox",
+      "file": "codex-rs/protocol/src/permissions.rs",
+      "line": 195,
+      "symbol": "FileSystemSandboxPolicy",
+      "section": "2",
+      "summary": "Approvals and sandbox",
+      "source_ref": {
+        "file": "codex-rs/protocol/src/permissions.rs",
+        "line": 195
+      }
+    },
+    {
+      "id": "core-session",
+      "label": "Core session",
+      "file": "codex-rs/core/src/session/mod.rs",
+      "line": 366,
+      "symbol": "struct Codex",
+      "section": "2",
+      "summary": "Core session",
+      "source_ref": {
+        "file": "codex-rs/core/src/session/mod.rs",
+        "line": 366
+      }
+    },
+    {
+      "id": "exec",
+      "label": "Exec",
+      "file": "codex-rs/exec/src/lib.rs",
+      "line": 770,
+      "symbol": "TurnStartParams",
+      "section": "2",
+      "summary": "Exec",
+      "source_ref": {
+        "file": "codex-rs/exec/src/lib.rs",
+        "line": 770
+      }
+    },
+    {
+      "id": "execution-mcp-patch",
+      "label": "Execution / MCP / patch",
+      "file": "codex-rs/core/src/session/mcp.rs",
+      "line": 251,
+      "symbol": "call_tool",
+      "section": "2",
+      "summary": "Execution / MCP / patch",
+      "source_ref": {
+        "file": "codex-rs/core/src/session/mcp.rs",
+        "line": 251
+      }
+    },
+    {
+      "id": "model-stream",
+      "label": "Model stream",
+      "file": "codex-rs/core/src/stream_events_utils.rs",
+      "line": 126,
+      "symbol": "record_completed_response_item",
+      "section": "2",
+      "summary": "Model stream",
+      "source_ref": {
+        "file": "codex-rs/core/src/stream_events_utils.rs",
+        "line": 126
+      }
+    },
+    {
+      "id": "protocol",
+      "label": "Protocol",
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 1262,
+      "symbol": "enum EventMsg",
+      "section": "2",
+      "summary": "Protocol",
+      "source_ref": {
+        "file": "codex-rs/protocol/src/protocol.rs",
+        "line": 1262
+      }
+    },
+    {
+      "id": "thread-history",
+      "label": "Thread history",
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 2769,
+      "symbol": "enum RolloutItem",
+      "section": "2",
+      "summary": "Thread history",
+      "source_ref": {
+        "file": "codex-rs/protocol/src/protocol.rs",
+        "line": 2769
+      }
+    },
+    {
+      "id": "tool-dispatch",
+      "label": "Tool dispatch",
+      "file": "codex-rs/core/src/tools/router.rs",
+      "line": 38,
+      "symbol": "struct ToolRouter",
+      "section": "2",
+      "summary": "Tool dispatch",
+      "source_ref": {
+        "file": "codex-rs/core/src/tools/router.rs",
+        "line": 38
+      }
+    },
+    {
+      "id": "user-surface",
+      "label": "User surface",
+      "file": "codex-rs/tui/src/app_command.rs",
+      "line": 39,
+      "symbol": "UserTurn",
+      "section": "2",
+      "summary": "User surface",
+      "source_ref": {
+        "file": "codex-rs/tui/src/app_command.rs",
+        "line": 39
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "user-surface",
+      "to": "core-session",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "core-session",
+      "to": "model-stream",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "model-stream",
+      "to": "tool-dispatch",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "tool-dispatch",
+      "to": "approvals-and-sandbox",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "approvals-and-sandbox",
+      "to": "execution-mcp-patch",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "execution-mcp-patch",
+      "to": "thread-history",
+      "kind": "flow",
+      "label": "lifecycle"
+    },
+    {
+      "from": "thread-history",
+      "to": "user-surface",
+      "kind": "flow",
+      "label": "lifecycle"
+    }
+  ],
+  "sections": [
+    {
+      "section": "1",
+      "title": "How to read this guide",
+      "related_hacks": []
+    },
+    {
+      "section": "2",
+      "title": "30-second architecture",
+      "related_hacks": [],
+      "first_source_ref": {
+        "file": "codex-rs/tui/src/app_command.rs",
+        "line": 39
+      }
+    },
+    {
+      "section": "3",
+      "title": "Turn lifecycle overview",
+      "related_hacks": [
+        "001",
+        "002",
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008",
+        "009",
+        "010"
+      ]
+    },
+    {
+      "section": "14",
+      "title": "Sub-agents and collaboration",
+      "related_hacks": [
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106",
+        "107",
+        "140"
+      ],
+      "first_source_ref": {
+        "file": "codex-rs/core/src/agent/control.rs",
+        "line": 136
+      }
+    },
+    {
+      "section": "18",
+      "title": "Hands-on hacks",
+      "related_hacks": []
+    }
+  ],
+  "hacks": [
+    {
+      "id": "001",
+      "script": "hacks/001_protocol_lifecycle.py",
+      "title": "protocol lifecycle",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/001_protocol_lifecycle.py",
+      "desc": "Print the core turn lifecycle event map.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "002",
+      "script": "hacks/002_response_stream_fixture.py",
+      "title": "response stream fixture",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/002_response_stream_fixture.py",
+      "desc": "Inspect response stream item handling markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "003",
+      "script": "hacks/003_turn_context_config.py",
+      "title": "turn context config",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/003_turn_context_config.py",
+      "desc": "Trace turn context and config marker wiring.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "004",
+      "script": "hacks/004_tool_dispatch_matrix.py",
+      "title": "tool dispatch matrix",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/004_tool_dispatch_matrix.py",
+      "desc": "Print the tool routing matrix.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "005",
+      "script": "hacks/005_approval_sandbox_decision.py",
+      "title": "approval sandbox decision",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/005_approval_sandbox_decision.py",
+      "desc": "Inspect approval and sandbox decision markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "006",
+      "script": "hacks/006_shell_exec_safe_command.py",
+      "title": "shell exec safe command",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/006_shell_exec_safe_command.py",
+      "desc": "Exercise a safe shell execution shape.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "007",
+      "script": "hacks/007_apply_patch_fixture.py",
+      "title": "apply patch fixture",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/007_apply_patch_fixture.py",
+      "desc": "Inspect apply_patch event and tool markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "008",
+      "script": "hacks/008_thread_rollout_fixture.py",
+      "title": "thread rollout fixture",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/008_thread_rollout_fixture.py",
+      "desc": "Trace rollout persistence markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "009",
+      "script": "hacks/009_app_server_event_projection.py",
+      "title": "app server event projection",
+      "band": "000-099",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/009_app_server_event_projection.py",
+      "desc": "Inspect app-server event projection markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "010",
+      "script": "hacks/010_capstone_stub_turn.py",
+      "title": "capstone stub turn",
+      "band": "000-099",
+      "kind": "simulated",
+      "gated": false,
+      "command": "python3 hacks/010_capstone_stub_turn.py",
+      "desc": "Simulate a full turn with stub model and tool output.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "100",
+      "script": "hacks/100_agent_registry_limits.py",
+      "title": "agent registry limits",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/100_agent_registry_limits.py",
+      "desc": "Show spawn depth and thread limit rules.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "101",
+      "script": "hacks/101_subagent_source_shape.py",
+      "title": "subagent source shape",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/101_subagent_source_shape.py",
+      "desc": "Inspect sub-agent source protocol shape.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "102",
+      "script": "hacks/102_agent_role_resolution.py",
+      "title": "agent role resolution",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/102_agent_role_resolution.py",
+      "desc": "Trace role resolution markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "103",
+      "script": "hacks/103_mailbox_delivery.py",
+      "title": "mailbox delivery",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/103_mailbox_delivery.py",
+      "desc": "Inspect mailbox delivery mechanics.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "104",
+      "script": "hacks/104_collab_event_mapping.py",
+      "title": "collab event mapping",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/104_collab_event_mapping.py",
+      "desc": "Trace collaboration event mapping.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "105",
+      "script": "hacks/105_spawn_edge_history.py",
+      "title": "spawn edge history",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/105_spawn_edge_history.py",
+      "desc": "Inspect spawn edge history markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "106",
+      "script": "hacks/106_subagent_resume_tree.py",
+      "title": "subagent resume tree",
+      "band": "100-199",
+      "kind": "fixture",
+      "gated": false,
+      "command": "python3 hacks/106_subagent_resume_tree.py",
+      "desc": "Trace resume tree markers.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "107",
+      "script": "hacks/107_capstone_stub_subagents.py",
+      "title": "capstone stub subagents",
+      "band": "100-199",
+      "kind": "simulated",
+      "gated": false,
+      "command": "python3 hacks/107_capstone_stub_subagents.py",
+      "desc": "Simulate spawn, send, wait, complete, and close.",
+      "expected_shape": "prints stable section labels and exits 0"
+    },
+    {
+      "id": "140",
+      "script": "hacks/140_live_subagent_spawn_gated.py",
+      "title": "live subagent spawn gated",
+      "band": "100-199",
+      "kind": "gated-live",
+      "gated": true,
+      "command": "python3 hacks/140_live_subagent_spawn_gated.py",
+      "desc": "Placeholder for a gated live sub-agent spawn probe.",
+      "expected_shape": "prints stable section labels and exits 0"
+    }
+  ],
+  "source_refs": [
+    {
+      "file": "codex-rs/tui/src/app_command.rs",
+      "line": 39
+    },
+    {
+      "file": "codex-rs/exec/src/lib.rs",
+      "line": 770
+    },
+    {
+      "file": "codex-rs/app-server/README.md",
+      "line": 76
+    },
+    {
+      "file": "codex-rs/core/src/session/mod.rs",
+      "line": 366
+    },
+    {
+      "file": "codex-rs/core/src/stream_events_utils.rs",
+      "line": 126
+    },
+    {
+      "file": "codex-rs/core/src/tools/router.rs",
+      "line": 38
+    },
+    {
+      "file": "codex-rs/protocol/src/permissions.rs",
+      "line": 195
+    },
+    {
+      "file": "codex-rs/core/src/session/mcp.rs",
+      "line": 251
+    },
+    {
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 2769
+    },
+    {
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 1262
+    },
+    {
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 30
+    },
+    {
+      "file": "codex-rs/core/src/agent/control.rs",
+      "line": 136
+    },
+    {
+      "file": "codex-rs/core/src/agent/registry.rs",
+      "line": 23
+    },
+    {
+      "file": "codex-rs/core/src/agent/mailbox.rs",
+      "line": 11
+    },
+    {
+      "file": "codex-rs/protocol/src/protocol.rs",
+      "line": 2564
+    },
+    {
+      "file": "codex-rs/app-server-protocol/src/protocol/event_mapping.rs",
+      "line": 75
+    }
+  ],
+  "warnings": []
+}
